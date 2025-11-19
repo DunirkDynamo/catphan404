@@ -1,0 +1,10 @@
+# -----------------------------
+# File: requirements.txt (updated)
+# -----------------------------
+numpy
+scipy
+pydicom
+imageio
+scikit-image
+matplotlib
+weasyprint

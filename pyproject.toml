@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "catphan404"
+version = "0.1.0"
+description = "A modular Catphan 404 analysis toolkit for CT image QA."
+authors = [
+    { name = "Oz", email = "jacgwat@gmail.com" }
+]
+readme = "README.md"
+license = { text = "MIT" }   # Change if needed
+
+# Core dependencies for the package itself
+dependencies = [
+    "numpy",
+    "scipy",
+    "pydicom",
+    "matplotlib",
+]
+
+requires-python = ">=3.9"
+
+[project.urls]
+Homepage = "https://github.com/your/repo"   # optional

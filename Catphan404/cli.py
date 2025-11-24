@@ -1,31 +1,48 @@
+#!/usr/bin/env python3
 # -----------------------------
-# File: catphan404/cli.py
+# File: catphan404_cli.py
 # -----------------------------
-"""Command-line interface for Catphan 404 analysis."""
 import argparse
-import json
-from .io import load_image
-from .analysis import Catphan404Analyzer
+import numpy as np
+import imageio.v2 as iio
+from catphan404.analysis import Catphan404Analyzer
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run Catphan 404 analysis modules.")
+    parser.add_argument('--image', type=str, required=True, help='Path to the input image.')
+    parser.add_argument('--module', type=str, default='all',
+                        choices=['all', 'uniformity', 'low_contrast', 'high_contrast', 'slice_thickness', 'geometry'],
+                        help='Module to run.')
+    parser.add_argument('--spacing', type=float, nargs=2, default=None,
+                        help='Pixel spacing in mm: dx dy')
+    parser.add_argument('--radius', type=float, default=None, help='Radius for uniformity ROIs.')
+    return parser.parse_args()
 
 def main():
-    """Run Catphan 404 analysis from the command line."""
-    parser = argparse.ArgumentParser(description='Minimal Catphan 404 analysis')
-    parser.add_argument('image', help='Path to single-slice image (DICOM, PNG, TIFF, JPG)')
-    parser.add_argument('-o', '--out', help='JSON output path (optional)')
-    args = parser.parse_args()
+    args = parse_args()
+    # Load image
+    image = iio.imread(args.image)
+    if image.ndim > 2:
+        # Convert to grayscale if needed
+        image = np.mean(image, axis=2)
 
-    img, meta = load_image(args.image)
-    analyzer = Catphan404Analyzer(img, spacing=meta.get('Spacing'))
-    results = analyzer.run_all()
+    # Instantiate analyzer
+    analyzer = Catphan404Analyzer(image, spacing=tuple(args.spacing) if args.spacing else None)
 
-    if args.out:
-        with open(args.out, 'w') as f:
-            json.dump(results, f, indent=2)
-        print(f"Results written to {args.out}")
+    # Run selected module(s)
+    if args.module == 'all':
+        results = analyzer.run_all()
     else:
-        print(json.dumps(results, indent=2))
+        run_method = f'run_{args.module}'
+        if not hasattr(analyzer, run_method):
+            print(f"Module {args.module} not implemented.")
+            return
+        getattr(analyzer, run_method)()
+        results = analyzer.results
 
+    # Print results
+    import pprint
+    pprint.pprint(results)
 
 if __name__ == '__main__':
     main()

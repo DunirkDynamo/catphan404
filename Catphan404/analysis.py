@@ -1,124 +1,77 @@
-# -----------------------------
-# File: catphan404/analysis.py
-# -----------------------------
-# analysis.py
-
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 import numpy as np
-from scipy import ndimage
-from . import io  # Keep io import for image loading convenience
+from .uniformity import UniformityAnalyzer
+from .geometry import GeometryAnalyzer
+from .high_contrast import HighContrastAnalyzer
+from .low_contrast import LowContrastAnalyzer
+from .slice_thickness import SliceThicknessAnalyzer
+
 
 class Catphan404Analyzer:
     """
-    Analyzer for a single slice containing the Catphan 404 phantom.
+    Central analyzer for Catphan 404 phantom.
 
-    This class computes standard uniformity and CT-number metrics,
-    and can be extended to include other analysis modules.
-
-    Example:
-        ```python
-        from catphan404 import Catphan404Analyzer, io
-        img, meta = io.load_image('catphan_slice.dcm')
-        analyzer = Catphan404Analyzer(img, spacing=meta.get('Spacing'))
-        analyzer.run_all()
-        print(analyzer.results)
-        ```
+    Can run individual analysis modules or all of them using `run_all()`.
 
     Attributes:
-        image (np.ndarray): Image array.
-        spacing (Optional[Tuple[float, float]]): Pixel spacing (mm).
-        results (dict): Dictionary of computed results.
+        image (np.ndarray): Input image.
+        spacing (Optional[Tuple[float, float]]): Pixel spacing.
+        results (dict): Dictionary storing results of each module.
     """
 
     def __init__(self, image: np.ndarray, spacing: Optional[Tuple[float, float]] = None):
-        """Initialize the analyzer.
-
-        Args:
-            image (np.ndarray): Input image array.
-            spacing (Optional[Tuple[float, float]]): Pixel spacing in mm (row, col).
-        """
+        """Initialize analyzer."""
         self.image = np.array(image, dtype=float)
-        self.spacing: Optional[Tuple[float, float]] = None
-        if spacing is not None:
-            try:
-                self.spacing = (float(spacing[0]), float(spacing[1]))
-            except Exception:
-                pass
-        self.results: Dict = {}
+        self.spacing = (float(spacing[0]), float(spacing[1])) if spacing else None
+        self.results: Dict[str, Any] = {}
 
-    def analyze(self) -> Dict:
-        """
-        Perform basic Catphan 404 analysis (uniformity + CT-number inserts).
+    # ------------------ Existing uniformity / CT-number ------------------
+    def run_uniformity(self):
+        """Run the uniformity and CT-number insert analysis."""
+        cy, cx = self._estimate_center(self.image)
+        radius = min(self.image.shape) * 0.15
+        analyzer = UniformityAnalyzer(self.image, (cx, cy), radius)
+        self.results['uniformity'] = analyzer.analyze()
+        self.results['center'] = (float(cx), float(cy))
 
-        Returns:
-            dict: Computed metrics for uniformity and CT-number inserts.
-        """
-        return self._run_uniformity() | self._run_ct_number()
+    # ------------------ Other module run methods ------------------
+    def run_high_contrast(self):
+        """Run high-contrast / edge / MTF analysis."""
+        analyzer = HighContrastAnalyzer(self.image)
+        self.results['high_contrast'] = analyzer.analyze()
 
-    def run_all(self) -> Dict:
-        """
-        Run the full suite of Catphan 404 analyses.
+    def run_low_contrast(self):
+        """Run low-contrast detectability analysis."""
+        cy, cx = self._estimate_center(self.image)
+        analyzer = LowContrastAnalyzer(self.image, (cx, cy))
+        self.results['low_contrast'] = analyzer.analyze()
 
-        Returns:
-            dict: Results dictionary including all analysis modules.
+    def run_slice_thickness(self):
+        """Run slice thickness (FWHM) analysis."""
+        analyzer = SliceThicknessAnalyzer(self.image)
+        self.results['slice_thickness'] = analyzer.analyze()
+
+    def run_geometry(self):
+        """Run geometric accuracy / fiducial analysis."""
+        analyzer = GeometryAnalyzer(self.image, expected_distance_mm=50.0, spacing_mm=1.0 if not self.spacing else self.spacing[0])
+        self.results['geometry'] = analyzer.analyze()
+
+    # ------------------ Run all modules ------------------
+    def run_all(self):
         """
-        self.results.clear()
-        # Currently we only have uniformity + CT-number; can extend later
-        self.results.update(self._run_uniformity())
-        self.results.update(self._run_ct_number())
+        Run all available analysis modules in sequence and aggregate results.
+        """
+        self.run_uniformity()
+        self.run_high_contrast()
+        self.run_low_contrast()
+        self.run_slice_thickness()
+        self.run_geometry()
         return self.results
 
-    # -------------------------
-    # Internal helper routines
-    # -------------------------
-
-    def _run_uniformity(self) -> Dict:
-        """Compute uniformity ROIs and deviations."""
-        img = self.image
-        cy, cx = self._estimate_center(img)
-        radius = min(img.shape) * 0.15
-        rois = self._make_circular_rois((cx, cy), radius, img.shape)
-        roi_stats = {}
-        for name, mask in rois.items():
-            vals = img[mask]
-            roi_stats[name] = {
-                'mean': float(np.nanmean(vals)),
-                'std': float(np.nanstd(vals)),
-                'count': int(vals.size)
-            }
-
-        center_mean = roi_stats['center']['mean']
-        deviations = {k: abs(v['mean'] - center_mean) for k, v in roi_stats.items()}
-
-        return {
-            'center': (float(cx), float(cy)),
-            'uniformity_rois': roi_stats,
-            'uniformity_deviations': deviations,
-            'max_uniformity_deviation': float(max(deviations.values()))
-        }
-
-    def _run_ct_number(self) -> Dict:
-        """Compute CT-number insert ROIs."""
-        img = self.image
-        cy, cx = self._estimate_center(img)
-        radius = min(img.shape) * 0.15 * 2.2  # larger ring for inserts
-        inserts = self._estimate_ct_number_rois((cx, cy), radius, img.shape)
-        insert_stats = {}
-        for i, mask in enumerate(inserts):
-            vals = img[mask]
-            insert_stats[f'insert_{i+1}'] = {
-                'mean': float(np.nanmean(vals)),
-                'std': float(np.nanstd(vals)),
-                'count': int(vals.size)
-            }
-        return {'ct_number_rois': insert_stats}
-
-    # -------------------------
-    # Internal geometry helpers
-    # -------------------------
-
+    # ------------------ Helper functions ------------------
     def _estimate_center(self, img: np.ndarray) -> Tuple[int, int]:
-        """Estimate phantom center using intensity-weighted COM."""
+        """Estimate phantom center using intensity-weighted center of mass."""
+        from scipy import ndimage
         sm = ndimage.gaussian_filter(img, sigma=3)
         thresh = np.percentile(sm, 50)
         bw = sm > thresh
@@ -126,34 +79,3 @@ class Catphan404Analyzer:
         if np.isnan(com[0]):
             return img.shape[0] // 2, img.shape[1] // 2
         return int(com[0]), int(com[1])
-
-    def _make_circular_rois(self, center_xy: Tuple[float, float], radius: float, shape: Tuple[int, int]) -> Dict[str, np.ndarray]:
-        """Generate circular ROIs for uniformity analysis."""
-        cx, cy = center_xy
-        ny, nx = shape
-        Y, X = np.ogrid[:ny, :nx]
-        dist = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
-        masks = {
-            'center': dist <= (radius * 0.5),
-            'right': (dist <= radius) & (X > cx + radius * 0.3),
-            'left': (dist <= radius) & (X < cx - radius * 0.3),
-            'top': (dist <= radius) & (Y < cy - radius * 0.3),
-            'bottom': (dist <= radius) & (Y > cy + radius * 0.3),
-        }
-        return masks
-
-    def _estimate_ct_number_rois(self, center_xy: Tuple[float, float], ring_radius: float, shape: Tuple[int, int]) -> list[np.ndarray]:
-        """Generate approximate CT-number insert ROIs."""
-        cx, cy = center_xy
-        ny, nx = shape
-        n_inserts = 8
-        roi_radius = int(min(nx, ny) * 0.03)
-        masks = []
-        angles = np.linspace(0, 2 * np.pi, n_inserts, endpoint=False)
-        Y, X = np.ogrid[:ny, :nx]
-        for ang in angles:
-            rx = cx + ring_radius * np.cos(ang)
-            ry = cy + ring_radius * np.sin(ang)
-            dist = np.sqrt((X - rx) ** 2 + (Y - ry) ** 2)
-            masks.append(dist <= roi_radius)
-        return masks

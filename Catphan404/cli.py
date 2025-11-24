@@ -1,48 +1,67 @@
-#!/usr/bin/env python3
-# -----------------------------
-# File: catphan404_cli.py
-# -----------------------------
+# File: catphan404/cli.py
 import argparse
-import numpy as np
-import imageio.v2 as iio
-from catphan404.analysis import Catphan404Analyzer
+import json
+from pathlib import Path
+from .io import load_image
+from .analysis import Catphan404Analyzer
+
+# List of available analysis modules
+AVAILABLE_MODULES = ['uniformity', 'low_contrast', 'high_contrast', 'slice_thickness', 'geometry']
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run Catphan 404 analysis modules.")
-    parser.add_argument('--image', type=str, required=True, help='Path to the input image.')
-    parser.add_argument('--module', type=str, default='all',
-                        choices=['all', 'uniformity', 'low_contrast', 'high_contrast', 'slice_thickness', 'geometry'],
-                        help='Module to run.')
-    parser.add_argument('--spacing', type=float, nargs=2, default=None,
-                        help='Pixel spacing in mm: dx dy')
-    parser.add_argument('--radius', type=float, default=None, help='Radius for uniformity ROIs.')
+    """Parse command-line arguments for the Catphan 404 CLI."""
+    parser = argparse.ArgumentParser(description="Catphan 404 analysis CLI")
+    parser.add_argument('image', help="Path to single-slice image (DICOM, PNG, TIFF, JPG)")
+    parser.add_argument(
+        '--modules', '-m',
+        nargs='+',
+        choices=AVAILABLE_MODULES + ['all'],
+        default=['all'],
+        help="Which analysis modules to run (default: all)"
+    )
+    parser.add_argument(
+        '--out', '-o',
+        type=str,
+        default=None,
+        help="JSON output path (default: derived from module names)"
+    )
     return parser.parse_args()
+
+def run_cli(args):
+    """Run analysis based on parsed arguments."""
+    # Load image
+    img, meta = load_image(args.image)
+    analyzer = Catphan404Analyzer(img, spacing=meta.get('Spacing'))
+
+    # Determine which modules to run
+    if 'all' in args.modules:
+        modules_to_run = AVAILABLE_MODULES
+    else:
+        modules_to_run = args.modules
+
+    # Run selected modules
+    for m in modules_to_run:
+        run_method = f'run_{m}'
+        getattr(analyzer, run_method)()
+
+    # Determine output filename
+    if args.out:
+        out_path = Path(args.out)
+    else:
+        filename = "_".join(modules_to_run) + ".json"
+        out_path = Path(filename)
+
+    # Write results to JSON
+    with open(out_path, 'w') as f:
+        json.dump(analyzer.results, f, indent=2)
+
+    print(f"Results written to {out_path.resolve()}")
+    print("Modules run:", ", ".join(modules_to_run))
+    print("Result keys in JSON:", ", ".join(analyzer.results.keys()))
 
 def main():
     args = parse_args()
-    # Load image
-    image = iio.imread(args.image)
-    if image.ndim > 2:
-        # Convert to grayscale if needed
-        image = np.mean(image, axis=2)
-
-    # Instantiate analyzer
-    analyzer = Catphan404Analyzer(image, spacing=tuple(args.spacing) if args.spacing else None)
-
-    # Run selected module(s)
-    if args.module == 'all':
-        results = analyzer.run_all()
-    else:
-        run_method = f'run_{args.module}'
-        if not hasattr(analyzer, run_method):
-            print(f"Module {args.module} not implemented.")
-            return
-        getattr(analyzer, run_method)()
-        results = analyzer.results
-
-    # Print results
-    import pprint
-    pprint.pprint(results)
+    run_cli(args)
 
 if __name__ == '__main__':
     main()

@@ -36,9 +36,29 @@ class Catphan404Analyzer:
 
     # ------------------ Other module run methods ------------------
     def run_high_contrast(self):
-        """Run high-contrast / edge / MTF analysis."""
-        analyzer = HighContrastAnalyzer(self.image)
-        self.results['high_contrast'] = analyzer.analyze()
+        """
+        Run high-contrast (CTP528) analysis.
+        """
+
+        # Use center from uniformity analysis if available
+        center = self.results.get('center', None)
+        if center is None:
+            cy, cx = self._estimate_center(self.image)
+            center = (cy, cx)
+
+        spacing = self.spacing[0] if self.spacing else 1.0
+
+        analyzer = HighContrastAnalyzer(
+            image=self.image,
+            center=center,      # Important
+            pixel_spacing=spacing
+        )
+
+        res = analyzer.analyze()
+        self.results['high_contrast'] = res
+
+        analyzer.plot_diagnostics()
+
 
     def run_low_contrast(self):
         """Run low-contrast detectability analysis."""

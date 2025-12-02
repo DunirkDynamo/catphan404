@@ -27,12 +27,22 @@ class Catphan404Analyzer:
 
     # ------------------ Existing uniformity / CT-number ------------------
     def run_uniformity(self):
-        """Run the uniformity and CT-number insert analysis."""
+        """
+        Run the uniformity analysis using the UniformityAnalyzer.
+        Populates self.results['uniformity'] with the computed statistics.
+        """
+        # Estimate phantom center from the image
         cy, cx = self._estimate_center(self.image)
-        radius = min(self.image.shape) * 0.15
-        analyzer = UniformityAnalyzer(self.image, (cx, cy), radius)
+
+        # Initialize the uniformity analyzer with image and center
+        analyzer = UniformityAnalyzer(self.image, (cx, cy))
+
+        # Run analysis and store results
         self.results['uniformity'] = analyzer.analyze()
+
+        # Also store center for reference
         self.results['center'] = (float(cx), float(cy))
+
 
     # ------------------ Other module run methods ------------------
     def run_high_contrast(self):
@@ -71,10 +81,6 @@ class Catphan404Analyzer:
         analyzer = SliceThicknessAnalyzer(self.image)
         self.results['slice_thickness'] = analyzer.analyze()
 
-    def run_geometry(self):
-        """Run geometric accuracy / fiducial analysis."""
-        analyzer = GeometryAnalyzer(self.image, expected_distance_mm=50.0, spacing_mm=1.0 if not self.spacing else self.spacing[0])
-        self.results['geometry'] = analyzer.analyze()
 
     # ------------------ Run all modules ------------------
     def run_all(self):

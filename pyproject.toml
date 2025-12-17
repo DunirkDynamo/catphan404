@@ -19,6 +19,7 @@ dependencies = [
     "scipy",
     "pydicom",
     "matplotlib",
+    "pathlib",
     "imageio",  # Needed for CLI image loading
 ]
 

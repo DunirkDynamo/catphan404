@@ -1,10 +1,13 @@
 from typing import Optional, Tuple, Dict, Any
 import numpy as np
+import json
 from .uniformity import UniformityAnalyzer
 from .geometry import GeometryAnalyzer
 from .high_contrast import HighContrastAnalyzer
-from .low_contrast import LowContrastAnalyzer
+from .ctp401_analyzer import AnalyzerCTP401
+from .ctp515_analyzer import AnalyzerCTP515
 from .slice_thickness import SliceThicknessAnalyzer
+from pathlib import Path
 
 
 class Catphan404Analyzer:
@@ -21,9 +24,15 @@ class Catphan404Analyzer:
 
     def __init__(self, image: np.ndarray, spacing: Optional[Tuple[float, float]] = None):
         """Initialize analyzer."""
-        self.image = np.array(image, dtype=float)
-        self.spacing = (float(spacing[0]), float(spacing[1])) if spacing else None
+        self.image                   = np.array(image, dtype=float)
+        self.spacing                 = (float(spacing[0]), float(spacing[1])) if spacing else None
         self.results: Dict[str, Any] = {}
+
+        # Store actual analyzer objects for plotting:
+        self._uniformity_analyzer    = None
+        self._high_contrast_analyzer = None
+        self._ctp401_analyzer        = None
+        self._ctp515_analyzer        = None
 
     # ------------------ Existing uniformity / CT-number ------------------
     def run_uniformity(self):
@@ -35,7 +44,7 @@ class Catphan404Analyzer:
         cy, cx = self._estimate_center(self.image)
 
         # Initialize the uniformity analyzer with image and center
-        analyzer = UniformityAnalyzer(self.image, (cx, cy))
+        analyzer = UniformityAnalyzer(self.image, (cx, cy), self.spacing[0])
 
         # Run analysis and store results
         self.results['uniformity'] = analyzer.analyze()
@@ -43,8 +52,11 @@ class Catphan404Analyzer:
         # Also store center for reference
         self.results['center'] = (float(cx), float(cy))
 
+        # Store the analyzer:
+        self._uniformity_analyzer = analyzer
 
-    # ------------------ Other module run methods ------------------
+
+    # ------------------ High Contrast Module (Line pairs) ----------------
     def run_high_contrast(self):
         """
         Run high-contrast (CTP528) analysis.
@@ -64,17 +76,65 @@ class Catphan404Analyzer:
             pixel_spacing=spacing
         )
 
+
+        # Store the results of the analysis:
         res = analyzer.analyze()
         self.results['high_contrast'] = res
 
-        analyzer.plot_diagnostics()
+        # Store the analyzer:
+        self._high_contrast_analyzer = analyzer
+
+    # --------------  Linearity Module (HU material inserts) --------------
+    def run_ctp401(self, t_offset: float = 0):
+        """
+        Run CTP401 material / scaling analysis.
+        """
 
 
-    def run_low_contrast(self):
-        """Run low-contrast detectability analysis."""
-        cy, cx = self._estimate_center(self.image)
-        analyzer = LowContrastAnalyzer(self.image, (cx, cy))
-        self.results['low_contrast'] = analyzer.analyze()
+        # Use center from uniformity analysis if available
+        center = self.results.get('center', None)
+        if center is None:
+            cy, cx = self._estimate_center(self.image)
+            center = (cy, cx)
+
+        spacing = self.spacing[0] if self.spacing else 1.0
+
+        analyzer = AnalyzerCTP401(
+            image=self.image,
+            center=center,      # Important
+            pixel_spacing=spacing
+        )
+
+
+        # Store the results of the analysis:
+        res = analyzer.analyze()
+        self.results['ctp401'] = res
+
+        # Store the analyzer:
+        self._ctp401_analyzer = analyzer
+
+
+
+
+    # ------------------ As yet undeveloped modules ---------------- 
+
+    def run_ctp515(self):
+        """Run CTP515 low-contrast detectability analysis."""
+        # Use center from uniformity analysis if available
+        center = self.results.get('center', None)
+        if center is None:
+            cy, cx = self._estimate_center(self.image)
+            center = (cy, cx)
+
+        spacing = self.spacing[0] if self.spacing else 1.0
+        analyzer = AnalyzerCTP515(self.image, center, spacing)
+        
+        # Store the results of the analysis:
+        res = analyzer.analyze()
+        self.results['ctp515'] = res
+
+        # Store the analyzer:
+        self._ctp515_analyzer = analyzer
 
     def run_slice_thickness(self):
         """Run slice thickness (FWHM) analysis."""
@@ -89,7 +149,7 @@ class Catphan404Analyzer:
         """
         self.run_uniformity()
         self.run_high_contrast()
-        self.run_low_contrast()
+        self.run_ctp515_analyzer()
         self.run_slice_thickness()
         self.run_geometry()
         return self.results
@@ -105,3 +165,34 @@ class Catphan404Analyzer:
         if np.isnan(com[0]):
             return img.shape[0] // 2, img.shape[1] // 2
         return int(com[0]), int(com[1])
+    
+
+    def save_results_json(self, path):
+        """
+        Save all collected analysis results to a JSON file.
+
+        Args:
+            path (str | Path): Where to save the JSON output.
+
+        Raises:
+            ValueError: If no analysis results exist yet.
+            OSError: If writing the file fails.
+        """
+        if not self.results:
+            raise ValueError(
+                "No results available. Run at least one analysis module before saving."
+            )
+
+        out_path = Path(path)
+
+        # Create parent directory if needed
+        if out_path.parent != Path('.'):
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with open(out_path, 'w', encoding='utf-8') as f:
+                json.dump(self.results, f, indent=2)
+        except OSError as e:
+            raise OSError(f"Failed to write JSON to {out_path}: {e}")
+
+        return out_path

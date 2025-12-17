@@ -19,7 +19,7 @@ class UniformityAnalyzer:
         roi_offset (float): Distance from center to offset peripheral ROIs (internal constant).
     """
 
-    def __init__(self, image: np.ndarray, center: tuple[float, float]):
+    def __init__(self, image: np.ndarray, center: tuple[float, float], spacing: np.float64):
         """
         Initialize the UniformityAnalyzer.
 
@@ -30,8 +30,35 @@ class UniformityAnalyzer:
         self.image = image.astype(float)
         self.center = center
         # ROI size and offsets in pixels (internal defaults)
-        self.roi_size = 20
-        self.roi_offset = 40
+        self.roi_size   = 15
+        self.roi_offset = 50
+
+   
+
+
+        # Compute regions of interest based on initialization input.
+        cy, cx          = self.center
+        self.roi_size   = self.roi_size/spacing
+        self.roi_offset = self.roi_offset/spacing
+
+        # Compute ROI bounds
+        half_size = int(self.roi_size // 2)
+        offset    = int(self.roi_offset)
+        # Center ROI
+        self.mc = self.image[int(cx)-half_size:int(cx)+half_size,
+                        int(cy)-half_size:int(cy)+half_size]
+        # North ROI
+        self.mn = self.image[int(cx)-half_size:int(cx)+half_size,
+                        int(cy)+offset-half_size:int(cy)+offset+half_size]
+        # South ROI
+        self.ms = self.image[int(cx)-half_size:int(cx)+half_size,
+                        int(cy)-offset-half_size:int(cy)-offset+half_size]
+        # East ROI
+        self.me = self.image[int(cx)+offset-half_size:int(cx)+offset+half_size,
+                        int(cy)-half_size:int(cy)+half_size]
+        # West ROI
+        self.mw = self.image[int(cx)-offset-half_size:int(cx)-offset+half_size,
+                        int(cy)-half_size:int(cy)+half_size]
 
     def analyze(self) -> dict:
         """
@@ -41,30 +68,11 @@ class UniformityAnalyzer:
             dict: JSON-compatible dictionary containing mean, standard deviation
                   for each ROI and the overall uniformity metric.
         """
-        cy, cx = self.center
 
-        # Compute ROI bounds
-        half_size = int(self.roi_size // 2)
-        offset = int(self.roi_offset)
 
-        # Center ROI
-        mc = self.image[int(cx)-half_size:int(cx)+half_size,
-                        int(cy)-half_size:int(cy)+half_size]
-        # North ROI
-        mn = self.image[int(cx)-half_size:int(cx)+half_size,
-                        int(cy)+offset-half_size:int(cy)+offset+half_size]
-        # South ROI
-        ms = self.image[int(cx)-half_size:int(cx)+half_size,
-                        int(cy)-offset-half_size:int(cy)-offset+half_size]
-        # East ROI
-        me = self.image[int(cx)+offset-half_size:int(cx)+offset+half_size,
-                        int(cy)-half_size:int(cy)+half_size]
-        # West ROI
-        mw = self.image[int(cx)-offset-half_size:int(cx)-offset+half_size,
-                        int(cy)-half_size:int(cy)+half_size]
 
         # Compute means and standard deviations
-        rois = {"centre": mc, "north": mn, "south": ms, "east": me, "west": mw}
+        rois = {"centre": self.mc, "north": self.mn, "south": self.ms, "east": self.me, "west": self.mw}
         results = {}
         means = []
 

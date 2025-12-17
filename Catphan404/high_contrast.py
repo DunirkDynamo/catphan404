@@ -1,8 +1,6 @@
 import numpy as np
 from scipy.interpolate import interpn
 from scipy.signal import find_peaks
-import matplotlib.pyplot as plt
-import json
 
 class HighContrastAnalyzer:
     """
@@ -28,28 +26,28 @@ class HighContrastAnalyzer:
 
     def __init__(
         self,
-        image: np.ndarray,
-        pixel_spacing: float,
-        center: tuple,
-        t_offset_deg: float = 0.0,
-        lp_r_mm: float = 48.0,
-        samples_per_segment: int = 50,
+        image              : np.ndarray,
+        pixel_spacing      : float,
+        center             : tuple,
+        t_offset_deg       : float = 0.0,
+        lp_r_mm            : float = 48.0,
+        samples_per_segment: int   = 50,
     ):
-        self.image = image.astype(float)
+        self.image         = image.astype(float)
         self.pixel_spacing = float(pixel_spacing)
         # center expected as (x_pixel, y_pixel) to match processDICOM convention
-        self.center_x = float(center[0])
-        self.center_y = float(center[1])
-        self.t_offset_deg = float(t_offset_deg)
-        self.lp_r_mm = float(lp_r_mm)
+        self.center_x            = float(center[0])
+        self.center_y            = float(center[1])
+        self.t_offset_deg        = float(t_offset_deg)
+        self.lp_r_mm             = float(lp_r_mm)
         self.samples_per_segment = int(samples_per_segment)
 
-        # default theta list (degrees) per original script plus t_offset
+        # default theta list (degrees) per original script (i.e. Devin's) plus t_offset
         self.theta_deg = np.array([10, 40, 62, 85, 103, 121, 140, 157, 173, 186]) + self.t_offset_deg
         # internal storage
-        self.lpx = None
-        self.lpy = None
-        self.npeaks = [[1, 2], [2, 3], [3, 4], [4, 4], [5, 4], [6, 5], [7, 5], [8, 5], [9, 5], [10, 5]]
+        self.lpx       = None
+        self.lpy       = None
+        self.npeaks    = [[1, 2], [2, 3], [3, 4], [4, 4], [5, 4], [6, 5], [7, 5], [8, 5], [9, 5], [10, 5]]
 
         # outputs to be filled by analyze()
         self.per_pair_mtf   = []    # scalar MTF per line pair (length 9 in original loop)
@@ -103,7 +101,7 @@ class HighContrastAnalyzer:
         df1 = np.diff(f1)
 
         # find derivative peaks (height threshold starts at 50)
-        h = 50
+        h             = 50
         peaks_max1, _ = find_peaks(df1, height=h)
         peaks_min1, _ = find_peaks(-df1, height=h)
 
@@ -123,8 +121,8 @@ class HighContrastAnalyzer:
         # sample local maxima/minima intensities between consecutive derivative peaks
         idxmax = []
         idxmin = []
-        Imax = []
-        Imin = []
+        Imax   = []
+        Imin   = []
         offset = 1
         for k in range(len(peaks1) - 1):
             if k % 2 == 0:
@@ -190,17 +188,17 @@ class HighContrastAnalyzer:
             lp_y_list.append(tmpy)
 
         # save collected results
-        self.per_pair_mtf = per_pair_mtf
-        self.profiles = profiles
-        self.peaks_max = pmax_list
-        self.peaks_min = pmin_list
+        self.per_pair_mtf   = per_pair_mtf
+        self.profiles       = profiles
+        self.peaks_max      = pmax_list
+        self.peaks_min      = pmin_list
         self.peaks_combined = pcomb_list
-        self.lp_x = lp_x_list
-        self.lp_y = lp_y_list
+        self.lp_x           = lp_x_list
+        self.lp_y           = lp_y_list
 
         # Normalize MTF (original: nMTF = MTF/max(np.array(MTF)))
         mtf_array = np.array(self.per_pair_mtf, dtype=float)
-        max_val = mtf_array.max() if mtf_array.size > 0 else 0.0
+        max_val   = mtf_array.max() if mtf_array.size > 0 else 0.0
         if max_val > 0:
             self.nMTF = mtf_array / max_val
         else:
@@ -232,42 +230,6 @@ class HighContrastAnalyzer:
 
         return self.to_dict()
 
-    # -------------------------
-    # Plotting diagnostics (similar to original script)
-    # -------------------------
-    def plot_diagnostics(self, savefile: str = None, vmin: float = None, vmax: float = None):
-        """
-        Plot:
-          - left: the image with centers and sampled segments overlaid
-          - right: normalized MTF vs lp/mm with markers for MTF points
-        """
-        fig, ax = plt.subplots(1, 2, figsize=(12, 5))
-        ax0, ax1 = ax
-
-        ax0.imshow(self.image, cmap='gray', vmin=vmin, vmax=vmax)
-        # plot centers
-        ax0.plot(self.lpx, self.lpy, 'ro', markersize=4)
-        # plot segments
-        for xs, ys in zip(self.lp_x, self.lp_y):
-            # xs/tmpx and ys/tmpy are tuples; in our storing they are (x0,x1) etc.
-            ax0.plot([xs[0], xs[1]], [ys[0], ys[1]], '-r', linewidth=0.8)
-        ax0.set_title("CTP528 centers & sampling segments")
-        ax0.axis('off')
-
-        # MTF curve
-        if self.lp_axis is not None and self.nMTF is not None:
-            ax1.plot(self.lp_axis, self.nMTF, label='nMTF')
-            for k, v in self.mtf_points.items():
-                ax1.plot(v, float(k[3:]) / 100, 'o', mfc='none', label=k)
-            ax1.set_xlabel('lp/mm')
-            ax1.set_ylabel('Normalized MTF')
-            ax1.grid(True)
-            ax1.legend()
-            ax1.set_title('Aggregated normalized MTF')
-
-        if savefile:
-            plt.savefig(savefile, bbox_inches='tight')
-        plt.show()
 
     # -------------------------
     # JSON output helpers
@@ -275,20 +237,17 @@ class HighContrastAnalyzer:
     def to_dict(self):
         """Return JSON-compatible results (includes full nMTF & lp_axis)."""
         return {
-            "pixel_spacing_mm": self.pixel_spacing,
-            "image_shape": self.image.shape,
-            "centers_x": self.lpx.tolist() if self.lpx is not None else None,
-            "centers_y": self.lpy.tolist() if self.lpy is not None else None,
-            "per_pair_mtf": [float(x) for x in self.per_pair_mtf],
-            "MTF10_lp_per_mm": self.mtf_points.get("MTF10"),
-            "MTF30_lp_per_mm": self.mtf_points.get("MTF30"),
-            "MTF50_lp_per_mm": self.mtf_points.get("MTF50"),
-            "MTF80_lp_per_mm": self.mtf_points.get("MTF80"),
-            "lp_mm": self.lp_axis.tolist() if self.lp_axis is not None else None,
-            "nmtf": self.nMTF.tolist() if self.nMTF is not None else None,
+            "pixel_spacing_mm" : self.pixel_spacing,
+            "image_shape"      : self.image.shape,
+            "centers_x"        : self.lpx.tolist() if self.lpx is not None else None,
+            "centers_y"        : self.lpy.tolist() if self.lpy is not None else None,
+            "per_pair_mtf"     : [float(x) for x in self.per_pair_mtf],
+            "MTF10_lp_per_mm"  : self.mtf_points.get("MTF10"),
+            "MTF30_lp_per_mm"  : self.mtf_points.get("MTF30"),
+            "MTF50_lp_per_mm"  : self.mtf_points.get("MTF50"),
+            "MTF80_lp_per_mm"  : self.mtf_points.get("MTF80"),
+            "lp_mm"            : self.lp_axis.tolist() if self.lp_axis is not None else None,
+            "nmtf"             : self.nMTF.tolist() if self.nMTF is not None else None,
         }
 
-    def save_json(self, filepath: str):
-        with open(filepath, 'w') as f:
-            json.dump(self.to_dict(), f, indent=2)
 

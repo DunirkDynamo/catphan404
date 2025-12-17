@@ -36,8 +36,8 @@ def _read_dicom(path: str) -> Tuple[np.ndarray, dict]:
         raise ImportError("pydicom required to read DICOM files. Install with 'pip install pydicom'.")
     ds = pydicom.dcmread(path)
     arr = ds.pixel_array.astype(float)
-    if hasattr(ds, "RescaleIntercept") and hasattr(ds, "RescaleSlope"):
-        arr = arr * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
+    #if hasattr(ds, "RescaleIntercept") and hasattr(ds, "RescaleSlope"):
+     #   arr = arr * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
     meta = {
         "Spacing": getattr(ds, 'PixelSpacing', None),
         "SliceThickness": getattr(ds, 'SliceThickness', None),
@@ -80,4 +80,18 @@ def load_image(path: str) -> Tuple[np.ndarray, dict]:
     lower = path.lower()
     if lower.endswith('.dcm') or lower.endswith('.dicom'):
         return _read_dicom(path)
-    return _read_imageio(path)
+    
+
+    ds = pydicom.dcmread(path, force=True)
+    ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+
+    arr = ds.pixel_array.astype(float)
+    #if hasattr(ds, "RescaleIntercept") and hasattr(ds, "RescaleSlope"):
+     #   arr = arr * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
+    meta = {
+        "Spacing": getattr(ds, 'PixelSpacing', None),
+        "SliceThickness": getattr(ds, 'SliceThickness', None),
+        "Modality": getattr(ds, 'Modality', None)
+    }
+    return arr, meta
+    #return _read_imageio(path)

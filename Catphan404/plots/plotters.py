@@ -470,74 +470,107 @@ class CTP515Plotter:
     """
     Plotter for AnalyzerCTP515 (low-contrast detectability) results.
     
-    Displays detected blobs overlaid on the image with annotations for CNR,
-    and provides visual summary of blob statistics.
+    Displays ROIs overlaid on the image and plots CNR/contrast versus diameter.
     """
 
     def __init__(self, analyzer):
         """
         Args:
-            analyzer (AnalyzerCTP515): Completed analyzer instance.
+            analyzer (AnalyzerCTP515): Completed analyzer instance with results.
         """
         self.analyzer = analyzer
-        self.results = analyzer.analyze()
-        self.image = analyzer.image
-        self.center = analyzer.center
+        self.results  = analyzer.results
+        self.image    = analyzer.image
+        self.center   = analyzer.center
 
     def plot(self):
         """
-        Generate visualization of low-contrast blob detection.
+        Generate visualization of low-contrast ROI analysis.
         
-        Shows the central 400x400 pixels with detected blobs overlaid.
-        Uses adaptive contrast: clip extremes, then display 60th-100th percentiles.
+        Layout:
+          - Left: Image with ROI overlays
+          - Right: CNR and Contrast vs. ROI Diameter (dual y-axes)
         """
-        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+        fig, (ax_img, ax_plot) = plt.subplots(1, 2, figsize=(16, 7))
         
-        # Crop to central 400 pixels
-        h, w = self.image.shape
-        crop_size = 200
-        start_y = max(0, (h - crop_size) // 2)
-        start_x = max(0, (w - crop_size) // 2)
-        end_y = min(h, start_y + crop_size)
-        end_x = min(w, start_x + crop_size)
+        # Left: Image with ROIs
+        h, w       = self.image.shape
+        crop_size  = 400
+        start_y    = max(0, (h - crop_size) // 2)
+        start_x    = max(0, (w - crop_size) // 2)
+        end_y      = min(h, start_y + crop_size)
+        end_x      = min(w, start_x + crop_size)
         cropped_image = self.image[start_y:end_y, start_x:end_x]
         
-        # Apply adaptive contrast: clip extremes (1st-99th), then focus on 60th-100th percentiles
-        pixels = cropped_image.flatten().astype(np.float32)
-        
-        # Clip extremes: remove outside 1st-99th percentiles
-        vmin_clip = np.percentile(pixels, 1)
-        vmax_clip = np.percentile(pixels, 99)
+        # Apply adaptive contrast
+        pixels         = cropped_image.flatten().astype(np.float32)
+        vmin_clip      = np.percentile(pixels, 1)
+        vmax_clip      = np.percentile(pixels, 99)
         clipped_pixels = np.clip(pixels, vmin_clip, vmax_clip)
+        vmin           = np.percentile(clipped_pixels, 60)
+        vmax           = np.percentile(clipped_pixels, 100)
         
-        # Display contrast over 60th to 100th percentiles of clipped data
-        vmin = np.percentile(clipped_pixels, 60)
-        vmax = np.percentile(clipped_pixels, 100)
-        
-        # Image with detected blobs
-        ax.imshow(cropped_image, cmap='gray', vmin=vmin, vmax=vmax)
-        ax.set_title(f"CTP515 Low-Contrast Detection ({self.results['n_detected']} blobs, central 400px)")
-        ax.axis('off')
+        ax_img.imshow(cropped_image, cmap='gray', vmin=vmin, vmax=vmax)
+        ax_img.set_title(f"CTP515 Low-Contrast ROIs (n={self.results['n_detected']})")
+        ax_img.axis('off')
         
         # Plot phantom center (adjusted for crop)
         cy, cx = self.center[1] - start_y, self.center[0] - start_x
-        ax.plot(cx, cy, 'r+', markersize=12, markeredgewidth=2)
+        ax_img.plot(cx, cy, 'r+', markersize=12, markeredgewidth=2)
         
-        # Overlay detected blobs (adjusted for crop)
-        for blob_name, blob_data in self.results['blobs'].items():
-            x, y = blob_data['x'] - start_x, blob_data['y'] - start_y
-            r = blob_data['r']
-            cnr = blob_data['cnr']
+        # Overlay ROIs and collect data for plotting
+        diameters = []
+        cnrs      = []
+        contrasts = []
+        
+        for roi_name, roi_data in self.results['blobs'].items():
+            x   = roi_data['x'] - start_x
+            y   = roi_data['y'] - start_y
+            r   = roi_data['r']
+            cnr = roi_data['cnr']
+            contrast = roi_data['contrast']
             
-            # Only draw if blob is within cropped region
+            # Extract diameter from roi name (e.g., 'roi_15mm' -> 15)
+            diameter = float(roi_name.split('_')[1].replace('mm', ''))
+            diameters.append(diameter)
+            cnrs.append(cnr)
+            contrasts.append(contrast)
+            
+            # Only draw if ROI is within cropped region
             if 0 <= x < crop_size and 0 <= y < crop_size:
-                # Draw circle around blob
                 circle = patches.Circle((x, y), r, edgecolor='cyan', facecolor='none', linewidth=2)
-                ax.add_patch(circle)
-                
-                # Annotate with CNR
-                ax.text(x, y - r - 5, f"CNR={cnr:.1f}", color='cyan', fontsize=8, 
-                       ha='center', va='top', bbox=dict(facecolor='black', alpha=0.6, pad=2))
+                ax_img.add_patch(circle)
+                ax_img.text(x, y - r - 5, f"{diameter:.0f}mm", color='cyan', fontsize=8, 
+                           ha='center', va='top', bbox=dict(facecolor='black', alpha=0.6, pad=2))
+        
+        # Right: CNR and Contrast vs. Diameter
+        # Sort by diameter for proper line plotting
+        sorted_indices = np.argsort(diameters)
+        diameters_sorted = [diameters[i] for i in sorted_indices]
+        cnrs_sorted      = [cnrs[i] for i in sorted_indices]
+        contrasts_sorted = [contrasts[i] for i in sorted_indices]
+        
+        # Primary axis: CNR
+        ax_plot.plot(diameters_sorted, cnrs_sorted, 'bo-', linewidth=2, markersize=8, label='CNR')
+        ax_plot.scatter(diameters_sorted, cnrs_sorted, c='blue', s=80, zorder=3)
+        ax_plot.set_xlabel('ROI Diameter (mm)', fontsize=12)
+        ax_plot.set_ylabel('CNR', fontsize=12, color='blue')
+        ax_plot.tick_params(axis='y', labelcolor='blue')
+        ax_plot.grid(True, alpha=0.3)
+        
+        # Secondary axis: Contrast
+        ax_contrast = ax_plot.twinx()
+        ax_contrast.plot(diameters_sorted, contrasts_sorted, 'ro-', linewidth=2, markersize=8, label='Contrast')
+        ax_contrast.scatter(diameters_sorted, contrasts_sorted, c='red', s=80, zorder=3)
+        ax_contrast.set_ylabel('Contrast', fontsize=12, color='red')
+        ax_contrast.tick_params(axis='y', labelcolor='red')
+        
+        ax_plot.set_title('CNR and Contrast vs. ROI Diameter')
+        
+        # Add legends
+        lines1, labels1 = ax_plot.get_legend_handles_labels()
+        lines2, labels2 = ax_contrast.get_legend_handles_labels()
+        ax_plot.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
         
         fig.tight_layout()
         return fig

@@ -27,7 +27,53 @@ class AnalyzerCTP515:
         pixel_spacing float)                : Pixel spacing in mm
     """
 
-    def __init__(self, image: np.ndarray, center: Tuple[float, float], pixel_spacing: float):
+    # Attributes common to ALL instances of the class:
+    roi_angles = [
+            -87.4 + 180,
+            -69.1 + 180,
+            -52.7 + 180,
+            -38.5 + 180,
+            -25.1 + 180,
+            -12.9 + 180,
+        ]
+    roi_dist_mm   = 50
+    roi_radius_mm = [6, 3.5, 3, 2.5, 2, 1.5]
+
+    roi_settings = {
+        "15": {
+            "angle": roi_angles[0],
+            "distance": roi_dist_mm,
+            "radius": roi_radius_mm[0],
+        },
+        "9": {
+            "angle": roi_angles[1],
+            "distance": roi_dist_mm,
+            "radius": roi_radius_mm[1],
+        },
+        "8": {
+            "angle": roi_angles[2],
+            "distance": roi_dist_mm,
+            "radius": roi_radius_mm[2],
+        },
+        "7": {
+            "angle": roi_angles[3],
+            "distance": roi_dist_mm,
+            "radius": roi_radius_mm[3],
+        },
+        "6": {
+            "angle": roi_angles[4],
+            "distance": roi_dist_mm,
+            "radius": roi_radius_mm[4],
+        },
+        "5": {
+            "angle": roi_angles[5],
+            "distance": roi_dist_mm,
+            "radius": roi_radius_mm[5],
+        },
+    }
+
+
+    def __init__(self, image: np.ndarray, center: Tuple[float, float], pixel_spacing: float, angle_offset:float = 0.0):
         """
         Initialize the analyzer with the CT image and phantom center.
 
@@ -35,8 +81,10 @@ class AnalyzerCTP515:
             image (np.ndarray): 2D array of HU values from the CT slice.
             center (Tuple[float, float]): (x, y) coordinates of phantom center.
         """
-        self.image  = image
-        self.center = center
+        self.image         = image
+        self.center        = center
+        self.angle_offset  = angle_offset
+        self.pixel_spacing = pixel_spacing
         # Validate inputs to ensure correct types and dimensions
         self._validate_inputs()
 
@@ -54,64 +102,21 @@ class AnalyzerCTP515:
             raise ValueError("image must be a 2D array")
         if not (isinstance(self.center, tuple) and len(self.center) == 2):
             raise TypeError("center must be a tuple of (x, y)")
+        if not isinstance(self.pixel_spacing, (float, int)):
+            raise TypeError("pixel_spacing must be a float or int")
+        if not isinstance(self.angle_offset, (float, int)):
+            raise TypeError("angle_offset must be a float or int")
 
     def analyze(self) -> Dict:
-
-
-
-
-    roi_angles = [
-            -87.4 + 180,
-            -69.1 + 180,
-            -52.7 + 180,
-            -38.5 + 180,
-            -25.1 + 180,
-            -12.9 + 180,
-        ]
-        roi_dist_mm = 50
-        roi_radius_mm = [6, 3.5, 3, 2.5, 2, 1.5]
-        roi_settings = {
-            "15": {
-                "angle": roi_angles[0],
-                "distance": roi_dist_mm,
-                "radius": roi_radius_mm[0],
-            },
-            "9": {
-                "angle": roi_angles[1],
-                "distance": roi_dist_mm,
-                "radius": roi_radius_mm[1],
-            },
-            "8": {
-                "angle": roi_angles[2],
-                "distance": roi_dist_mm,
-                "radius": roi_radius_mm[2],
-            },
-            "7": {
-                "angle": roi_angles[3],
-                "distance": roi_dist_mm,
-                "radius": roi_radius_mm[3],
-            },
-            "6": {
-                "angle": roi_angles[4],
-                "distance": roi_dist_mm,
-                "radius": roi_radius_mm[4],
-            },
-            "5": {
-                "angle": roi_angles[5],
-                "distance": roi_dist_mm,
-                "radius": roi_radius_mm[5],
-            },
-        }
-
-
         """
         Perform low-contrast detectability analysis.
 
         This method:
-        1. Defines a search region around the phantom center.
-        2. Detects potential low-contrast blobs using blob detection.
-        3. For each blob, computes signal/background stats and CNR.
-        4. Returns a summary of detected blobs and their metrics.
+        1. Defines ROI locations based on predefined angles and distances.
+        2. For each ROI, creates a circular mask and computes mean/std.
+        3. Computes a common background ROI for noise reference.
+        4. Calculates CNR for each ROI against the background.
+        5. Returns a summary of detected ROIs and their metrics.
 
         Returns:
             Dict: Contains 'n_detected' (int) and 'blobs' (dict of blob stats).
@@ -121,76 +126,89 @@ class AnalyzerCTP515:
         ny, nx = self.image.shape
         cy, cx = int(self.center[1]), int(self.center[0])
 
-        # Define a central search region to focus blob detection
-        # This avoids edge artifacts and focuses on the phantom's core
-        # where low-contrast inserts are typically placed
-        search = self.image[
-            max(0, cy - ny // 3):min(ny, cy + ny // 3),
-            max(0, cx - nx // 3):min(nx, cx + nx // 3)
-        ]
-
-        # Detect blobs using Laplacian of Gaussian (LoG) filtering
-        # Parameters tuned for typical low-contrast inserts:
-        # - min_sigma/max_sigma: Size range for blobs (pixels)
-        # - threshold: Adaptive based on local noise level
-        blobs = detect_blobs(search, min_sigma=1.5, max_sigma=6, threshold=np.std(search) * 0.5)
-
         # Initialize results dictionary
         results = {}
         
-        # Process each detected blob
-        for i, b in enumerate(blobs):
-            # Unpack blob properties: y, x (in search coords), radius
-            y, x, r = b
+        # Compute background statistics from a common background ROI
+        # Background ROI: 38mm from center, 12mm diameter (6mm radius)
+        bg_dist_mm   = 38.0
+        bg_radius_mm = 6.0
+        bg_angle_deg = self.roi_angles[0] + self.angle_offset  # Use first angle for background
+        bg_angle_rad = math.radians(bg_angle_deg)
+        
+        # Convert background ROI location to pixels
+        bg_dist_px   = bg_dist_mm / self.pixel_spacing
+        bg_radius_px = bg_radius_mm / self.pixel_spacing
+        bg_x         = cx + bg_dist_px * math.cos(bg_angle_rad)
+        bg_y         = cy + bg_dist_px * math.sin(bg_angle_rad)
+        
+        # Create background mask and extract values
+        mask_bg = circular_roi_mask(self.image.shape, (bg_x, bg_y), bg_radius_px)
+        bg_vals = self.image[mask_bg]
+        
+        # Compute background statistics
+        if bg_vals.size < 10:
+            raise ValueError("Insufficient background pixels for analysis")
+        mean_bg = float(np.mean(bg_vals))
+        std_bg  = float(np.std(bg_vals))
+        
+        # Process each ROI
+        for i, (roi_name, roi_specs) in enumerate(self.roi_settings.items()):
+            # Extract ROI specifications
+            angle_deg   = roi_specs["angle"] + self.angle_offset
+            distance_mm = roi_specs["distance"]
+            radius_mm   = roi_specs["radius"]
             
-            # Translate coordinates from search region to full image
-            y_full = int(y) + max(0, cy - ny // 3)
-            x_full = int(x) + max(0, cx - nx // 3)
-
-            # Create circular ROI mask for the blob's signal area
-            mask = circular_roi_mask(self.image.shape, (x_full, y_full), r)
-            vals = self.image[mask]  # HU values in the blob
-
-            # Create annulus mask for background (ring around blob)
-            # Radius 2x blob size, excluding the signal area
-            mask_bg = circular_roi_mask(self.image.shape, (x_full, y_full), r * 2) & ~mask
-            bg_vals = self.image[mask_bg]  # HU values in background
-
-            # Skip if insufficient data (avoids division by zero or noise)
-            if vals.size < 10 or bg_vals.size < 10:
+            # Convert to pixels
+            distance_px = distance_mm / self.pixel_spacing
+            radius_px = radius_mm / self.pixel_spacing
+            
+            # Calculate ROI center position
+            angle_rad = math.radians(angle_deg)
+            x_full    = cx + distance_px * math.cos(angle_rad)
+            y_full    = cy + distance_px * math.sin(angle_rad)
+            
+            # Create circular ROI mask
+            mask = circular_roi_mask(self.image.shape, (x_full, y_full), radius_px)
+            vals = self.image[mask]
+            
+            # Skip if insufficient data
+            if vals.size < 10:
                 continue
-
-            # Compute statistics
-            mean_signal = float(np.mean(vals))      # Average HU in blob
-            mean_bg = float(np.mean(bg_vals))        # Average HU in background
-            std_bg = float(np.std(bg_vals))          # Noise (std dev) in background
             
+            # Compute ROI statistics
+            mean_signal = float(np.mean(vals))
+            std_signal  = float(np.std(vals))
+            
+
+            # Contrast: relative difference between signal and background magnitudes:
+            contrast = abs(mean_signal - mean_bg) / (abs(mean_bg) + 1e-8)
+
             # Contrast-to-Noise Ratio: measures detectability
-            # Higher CNR means the blob is more visible
-            cnr = abs(mean_signal - mean_bg) / (std_bg + 1e-8)  # Add epsilon to avoid div by zero
-
-            # Calculate angle of blob center relative to phantom center
-            # atan2(y_delta, x_delta) gives angle in radians from positive x-axis
-            angle_rad = math.atan2(y_full - cy, x_full - cx)
-            angle_deg = math.degrees(angle_rad)  # Convert to degrees for readability
-
-            # Store results for this blob
-            x_delta = int(x_full - cx)               # x offset from phantom center
-            y_delta = int(y_full - cy)               # y offset from phantom center
-            r_delta = (x_delta**2 + y_delta**2)**0.5 # radial offset from phantom center
-            results[f'blob_{i+1}'] = {
-                'x'       : int(x_full),          # Blob center x-coordinate
-                'y'       : int(y_full),          # Blob center y-coordinate
-                'r'       : float(r),             # Blob radius (pixels)
-                'x_delta' : x_delta,              # x offset from phantom center
-                'y_delta' : y_delta,              # y offset from phantom center
-                'r_delta' : r_delta,              # radial offset from phantom center
-                'angle'   : float(angle_deg),     # Angle in degrees from phantom center
-                'mean'    : mean_signal,          # Mean HU in blob
-                'bg_mean' : mean_bg,              # Mean HU in background
-                'bg_std'  : std_bg,               # Std dev HU in background
-                'cnr'     : float(cnr)            # Contrast-to-Noise Ratio
+            # Higher CNR means the ROI is more visible
+            cnr = abs(mean_signal - mean_bg) / (std_bg + 1e-8)
+            
+            # Store results for this ROI
+            x_delta = int(x_full - cx)
+            y_delta = int(y_full - cy)
+            r_delta = (x_delta**2 + y_delta**2)**0.5
+            
+            results[f'roi_{roi_name}mm'] = {
+                'x'       : int(x_full),
+                'y'       : int(y_full),
+                'r'       : float(radius_px),
+                'x_delta' : x_delta,
+                'y_delta' : y_delta,
+                'r_delta' : r_delta,
+                'angle'   : float(angle_deg),
+                'mean'    : mean_signal,
+                'std'     : std_signal,
+                'bg_mean' : mean_bg,
+                'bg_std'  : std_bg,
+                'cnr'     : float(cnr),
+                'contrast': float(contrast),
             }
 
-        # Return summary: number detected and detailed blob data
-        return {'n_detected': len(results), 'blobs': results}
+        # Store and return summary: number detected and detailed ROI data
+        self.results = {'n_detected': len(results), 'blobs': results}
+        return self.results

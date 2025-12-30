@@ -16,10 +16,16 @@ class UniformityPlotter:
     """
     Plotter for UniformityAnalyzer results.
 
-    This class visualizes:
-      - The uniformity slice image.
-      - The five ROIs (center, north, south, east, west).
-      - Annotated mean and std in each ROI.
+    Creates a comprehensive 3x2 figure layout showing:
+      - Image with ROI overlays and statistics
+      - Overlaid ROI histograms
+      - Statistics table with mean, std, and SEM for each ROI
+      - Boxplots of ROI intensities
+      - Center line profiles (vertical and horizontal)
+      - Uniformity metric display
+
+    Args:
+        analyzer (UniformityAnalyzer): Completed analyzer instance with results.
     """
 
     def __init__(self, analyzer):
@@ -31,15 +37,15 @@ class UniformityPlotter:
         self.results = analyzer.analyze()   # dict already JSON-compatible
 
     # ------------------------------------------------------------------
-    def _add_roi_box(self, ax, center_xy, size, label, color="yellow"):
+    def _add_roi_box(self, ax, center_xy, size, label, color="yellow", above=True):
         """Internal helper to draw a square ROI with text."""
 
         cx, cy = center_xy
-        half = size / 2
+        half   = size / 2
 
-        # Rectangle uses (x_min, y_min) in image coordinates
+        # Rectangle uses (x, y) = (col, row) for matplotlib
         rect = patches.Rectangle(
-            (cy - half, cx - half),
+            (cx - half, cy - half),
             size, 
             size,
             linewidth=1.5,
@@ -51,28 +57,38 @@ class UniformityPlotter:
         # text slightly above the ROI
         stats = self.results[label.lower()]
         text = f"{stats['mean']:.1f} ± {stats['std']:.1f}"
-        ax.text(
-            cy, cx - half - 5,   # above the ROI
-            text,
-            color=color,
-            ha="center", va="bottom",
-            fontsize=9,
-            bbox=dict(facecolor="black", alpha=0.4, pad=2)
-        )
+        if above:
+            ax.text(
+                cx, cy - 2 * half,   # above the ROI
+                text,
+                color=color,
+                ha="center", va="bottom",
+                fontsize=9,
+                bbox=dict(facecolor="black", alpha=0.4, pad=2)
+            )
+        else:
+            ax.text(
+                cx, cy + 2* half,   # below the ROI
+                text,
+                color=color,
+                ha="center", va="top",
+                fontsize=9,
+                bbox=dict(facecolor="black", alpha=0.4, pad=2)
+            )
 
     # ------------------------------------------------------------------
     def plot(self):
         """Generate the uniformity figure with image, overlaid ROI histograms, errorbar plot, and boxplot."""
         
         img    = self.analyzer.image
-        cy, cx = self.analyzer.center
+        cx, cy = self.analyzer.center
         
         fig, axes = plt.subplots(3, 2, figsize=(12, 15))
-        ax_img = axes[0, 0]
-        ax_hist = axes[0, 1]
-        ax_bar = axes[1, 0]
-        ax_box = axes[1, 1]
-        ax_prof = axes[2, 0]
+        ax_img    = axes[0, 0]
+        ax_hist   = axes[0, 1]
+        ax_bar    = axes[1, 0]
+        ax_box    = axes[1, 1]
+        ax_prof   = axes[2, 0]
         ax_metric = axes[2, 1]
         
         # Left top: image with ROIs
@@ -80,16 +96,18 @@ class UniformityPlotter:
         ax_img.set_title("Uniformity Analysis")
         ax_img.set_axis_off()
         
+        # self.analyzer.center is (x, y) = (col, row), so unpack as cx, cy
+        cx, cy = self.analyzer.center
         size   = self.analyzer.roi_size
         offset = self.analyzer.roi_offset
         
         # ROI centers
         centers = {
             "centre" : (cx, cy),
-            "north"  : (cx, cy + offset),
-            "south"  : (cx, cy - offset),
-            "east"   : (cx + offset, cy),
-            "west"   : (cx - offset, cy),
+            "north"  : (cx, cy - offset),  # Above center (smaller row)
+            "south"  : (cx, cy + offset),  # Below center (larger row)
+            "east"   : (cx + offset, cy),  # Right of center (larger column)
+            "west"   : (cx - offset, cy),  # Left of center (smaller column)
         }
         
         # Colors for ROIs (matching the image annotations)
@@ -102,20 +120,23 @@ class UniformityPlotter:
         }
         
         legend_handles = []
-        labels = list(centers.keys())
-        means = []
-        sems = []
-        roi_datas = []
+        labels         = list(centers.keys())
+        means          = []
+        sems           = []
+        roi_datas      = []
         
         # Draw ROIs on image and collect data for histograms and bar plot
         for label, coord in centers.items():
             color = roi_colors.get(label, "white")
-            self._add_roi_box(ax_img, coord, size, label, color)
+            if label == "centre" or label == "south":
+                self._add_roi_box(ax_img, coord, size, label, color, above=False)
+            else:
+                self._add_roi_box(ax_img, coord, size, label, color)
             
             # For histogram: extract ROI data
             cx_roi, cy_roi = coord
-            half = size / 2
-            roi_data = img[int(cy_roi - half):int(cy_roi + half), int(cx_roi - half):int(cx_roi + half)].flatten()
+            half           = size / 2
+            roi_data       = img[int(cy_roi - half):int(cy_roi + half), int(cx_roi - half):int(cx_roi + half)].flatten()
             
             roi_datas.append(roi_data)
             
@@ -132,9 +153,9 @@ class UniformityPlotter:
             # Collect for bar plot
             means.append(mean_val)
             roi_attr = getattr(self.analyzer, f'm{label[0]}')  # mc, mn, ms, me, mw
-            n = roi_attr.size
-            std_val = self.results[label.lower()]['std']
-            sem = std_val / np.sqrt(n)
+            n        = roi_attr.size
+            std_val  = self.results[label.lower()]['std']
+            sem      = std_val / np.sqrt(n)
             sems.append(sem)
         
         # Top right: overlaid step histograms
@@ -145,21 +166,47 @@ class UniformityPlotter:
         ax_hist.grid(True, alpha=0.3)
         ax_hist.set_facecolor('gray')
         
-        # Bottom left: scatter plot with SEM error bars
-        x_pos = np.arange(len(labels))
-        for i, (x, m, s, l) in enumerate(zip(x_pos, means, sems, labels)):
-            ax_bar.errorbar(x, m, yerr=s, fmt='o', markersize=10, capsize=5, color=roi_colors[l], ecolor='black', linewidth=2, alpha=0.5)
-        ax_bar.set_xticks(x_pos)
-        ax_bar.set_xticklabels(labels)
-        ax_bar.set_ylabel('Mean HU')
-        ax_bar.set_title('ROI Means with Standard Error of the Mean')
+        # Bottom left: statistics table
+        ax_bar.axis('off')
         
-        # Condense y-axis to range of largest error bars
-        y_min = min(m - s for m, s in zip(means, sems))
-        y_max = max(m + s for m, s in zip(means, sems))
-        ax_bar.set_ylim(y_min, y_max)
+        # Prepare table data
+        table_data = [['ROI', 'Mean (HU)', 'Std (HU)', 'SEM (HU)']]
+        for label, mean_val, sem in zip(labels, means, sems):
+            std_val = self.results[label.lower()]['std']
+            table_data.append([
+                label.title(),
+                f"{mean_val:.1f}",
+                f"{std_val:.1f}",
+                f"{sem:.2f}"
+            ])
         
-        # Bottom middle: boxplot
+        # Create table
+        table = ax_bar.table(cellText=table_data, cellLoc='center', loc='center',
+                            colWidths=[0.25, 0.25, 0.25, 0.25])
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1, 2)
+        
+        # Style header row
+        for i in range(len(table_data[0])):
+            cell = table[(0, i)]
+            cell.set_facecolor('#4CAF50')
+            cell.set_text_props(weight='bold', color='white')
+        
+        # Alternate row colors and apply ROI colors
+        for i in range(1, len(table_data)):
+            roi_label = labels[i-1]
+            for j in range(len(table_data[0])):
+                cell = table[(i, j)]
+                if i % 2 == 0:
+                    cell.set_facecolor('#f0f0f0')
+                # Color-code the ROI name column
+                if j == 0:
+                    cell.set_text_props(color=roi_colors[roi_label], weight='bold')
+        
+        ax_bar.set_title('ROI Statistics', fontsize=12, weight='bold', pad=10)
+        
+        # Middle right: boxplot
         ax_box.boxplot(roi_datas, labels=labels, patch_artist=True)
         ax_box.set_title('ROI Boxplots')
         ax_box.set_ylabel('HU')
@@ -212,6 +259,14 @@ class UniformityPlotter:
 class HighContrastPlotter:
     """
     Plotter for HighContrastAnalyzer results.
+
+    Creates a multi-panel figure showing:
+      - Image with line pair centers and sampling segments
+      - Normalized MTF curve with MTF10/30/50/80 markers
+      - Stacked color-coded intensity profiles from line pair samples
+
+    Args:
+        analyzer (HighContrastAnalyzer): Completed analyzer instance with results.
     """
 
     def __init__(self, analyzer):
@@ -230,56 +285,66 @@ class HighContrastPlotter:
     def plot(self, savefile: str = None, vmin: float = None, vmax: float = None):
         """
         Plot:
-          - left column (2 rows): image with segments (top) and MTF curve (bottom)
-          - right column: all profiles stacked vertically with shared x-axis
+          - left: image with segments (top) and MTF curve (bottom)
+          - right: all profiles stacked vertically with color coding
         """
         # Count profiles to determine layout
         n_profiles = len(self.analyzer.profiles) if hasattr(self.analyzer, 'profiles') and self.analyzer.profiles else 0
         
         # Create figure with GridSpec for flexible layout
         from matplotlib.gridspec import GridSpec
-        fig = plt.figure(figsize=(16, 10))
-        gs = GridSpec(max(n_profiles, 2), 2, figure=fig, width_ratios=[1, 1], height_ratios=[1] * max(n_profiles, 2))
+        n_to_show = n_profiles if n_profiles > 0 else 4
+        n_rows = max(n_to_show, 2)
+        fig = plt.figure(figsize=(16, max(10, n_to_show * 2)))
+        gs = GridSpec(n_rows, 2, figure=fig, width_ratios=[1, 1])
         
-        # Left top: image with centers and sampled segments
-        ax0 = fig.add_subplot(gs[:max(n_profiles, 2)//2, 0])
-        ax0.imshow(self.image, cmap='gray', vmin=vmin, vmax=vmax)
-        ax0.plot(self.lpx, self.lpy, 'ro', markersize=4)
+        # Left top: image with centers and sampled segments (spans half of rows)
+        ax_img = fig.add_subplot(gs[:n_rows//2, 0])
+        ax_img.imshow(self.image, cmap='gray', vmin=vmin, vmax=vmax)
+        ax_img.plot(self.lpx, self.lpy, 'ro', markersize=4)
         for xs, ys in zip(self.lp_x, self.lp_y):
-            ax0.plot([xs[0], xs[1]], [ys[0], ys[1]], '-r', linewidth=0.8)
-        ax0.set_title("CTP528 centers & sampling segments")
-        ax0.axis('off')
+            ax_img.plot([xs[0], xs[1]], [ys[0], ys[1]], '-r', linewidth=0.8)
+        ax_img.set_title("CTP528 centers & sampling segments")
+        ax_img.axis('off')
 
-        # Left bottom: normalized MTF curve
-        ax1 = fig.add_subplot(gs[max(n_profiles, 2)//2:, 0])
+        # Left bottom: normalized MTF curve (spans remaining rows)
+        ax_mtf = fig.add_subplot(gs[n_rows//2:, 0])
         if self.lp_axis is not None and self.nMTF is not None:
-            ax1.plot(self.lp_axis, self.nMTF, label='nMTF')
+            ax_mtf.plot(self.lp_axis, self.nMTF, label='nMTF', linewidth=2)
             for k, v in self.mtf_points.items():
-                ax1.plot(v, float(k[3:]) / 100, 'o', mfc='none', label=k)
-            ax1.set_xlabel('lp/mm')
-            ax1.set_ylabel('Normalized MTF')
-            ax1.grid(True)
-            ax1.legend()
-            ax1.set_title('Aggregated normalized MTF')
+                ax_mtf.plot(v, float(k[3:]) / 100, 'o', mfc='none', markersize=8, label=k)
+            ax_mtf.set_xlabel('lp/mm')
+            ax_mtf.set_ylabel('Normalized MTF')
+            ax_mtf.grid(True)
+            ax_mtf.legend()
+            ax_mtf.set_title('Aggregated normalized MTF')
 
         # Right: all profiles stacked vertically with shared x-axis
-        if n_profiles > 0:
+        if n_to_show > 0:
+            # Generate distinct colors for profiles
+            if n_to_show <= 10:
+                colors = plt.cm.tab10(np.linspace(0, 1, 10))
+            else:
+                colors = plt.cm.tab20(np.linspace(0, 1, 20))
+            
             ax_profiles = []
-            for i in range(n_profiles):
+            for i in range(n_to_show):
                 if i == 0:
                     ax_prof = fig.add_subplot(gs[i, 1])
                 else:
                     ax_prof = fig.add_subplot(gs[i, 1], sharex=ax_profiles[0])
                 
                 profile = self.analyzer.profiles[i]
-                ax_prof.plot(range(len(profile)), profile, 'b-')
+                ax_prof.plot(range(len(profile)), profile, color=colors[i], linewidth=1.5)
                 ax_prof.set_ylabel('HU', fontsize=9)
                 ax_prof.grid(True, alpha=0.3)
                 ax_prof.text(0.02, 0.98, f'Profile {i}', transform=ax_prof.transAxes, 
-                            fontsize=9, va='top', ha='left', bbox=dict(facecolor='white', alpha=0.7, pad=2))
+                            fontsize=9, va='top', ha='left', 
+                            bbox=dict(facecolor='white', alpha=0.7, pad=2),
+                            color=colors[i], weight='bold')
                 
                 # Only show x-label on bottom plot
-                if i == n_profiles - 1:
+                if i == n_to_show - 1:
                     ax_prof.set_xlabel('Sample Index')
                 else:
                     ax_prof.tick_params(labelbottom=False)
@@ -288,6 +353,7 @@ class HighContrastPlotter:
 
         fig.tight_layout()
         return fig
+        return fig
 
 
 
@@ -295,8 +361,17 @@ class HighContrastPlotter:
 class CTP401Plotter:
     """
     Plotter for AnalyzerCTP401 results.
-    Displays the ROIs overlaid on the image with their mean and std HU values.
-    Color-coded, with a legend beside the plot.
+
+    Creates a comprehensive display with:
+      - Main image showing ROI locations as color-coded circles
+      - Per-ROI histograms showing intensity distributions with mean/median markers
+      - 2D heatmaps of pixel intensities within each ROI
+      - Color-coded legend matching ROI names to materials (LDPE, Air, Teflon, Acrylic)
+
+    Args:
+        analyzer (AnalyzerCTP401): Completed analyzer instance.
+        vmin (float, optional): Minimum intensity for display windowing.
+        vmax (float, optional): Maximum intensity for display windowing.
     """
 
     def __init__(self, analyzer, vmin: float = None, vmax: float = None):
@@ -469,8 +544,17 @@ class CTP401Plotter:
 class CTP515Plotter:
     """
     Plotter for AnalyzerCTP515 (low-contrast detectability) results.
-    
-    Displays ROIs overlaid on the image and plots CNR/contrast versus diameter.
+
+    Creates a 2x2 layout displaying:
+      - Image with color-coded ROI circles and background ROI
+      - Dual-axis plot of CNR and Contrast vs. ROI diameter
+      - Statistics table showing mean, std, CNR, and contrast for each ROI
+
+    ROIs are color-coded by diameter size with adaptive contrast windowing
+    to enhance visibility of low-contrast features.
+
+    Args:
+        analyzer (AnalyzerCTP515): Completed analyzer instance with results.
     """
 
     def __init__(self, analyzer):
@@ -488,46 +572,91 @@ class CTP515Plotter:
         Generate visualization of low-contrast ROI analysis.
         
         Layout:
-          - Left: Image with ROI overlays
-          - Right: CNR and Contrast vs. ROI Diameter (dual y-axes)
+          - Top left: Image with ROI overlays
+          - Top right: CNR and Contrast vs. ROI Diameter (dual y-axes)
+          - Bottom: Statistics table
         """
-        fig, (ax_img, ax_plot) = plt.subplots(1, 2, figsize=(16, 7))
+        fig = plt.figure(figsize=(16, 10))
         
-        # Left: Image with ROIs
-        h, w       = self.image.shape
-        crop_size  = 400
-        start_y    = max(0, (h - crop_size) // 2)
-        start_x    = max(0, (w - crop_size) // 2)
-        end_y      = min(h, start_y + crop_size)
-        end_x      = min(w, start_x + crop_size)
-        cropped_image = self.image[start_y:end_y, start_x:end_x]
+        # Create subplots
+        ax_img = plt.subplot2grid((2, 2), (0, 0))
+        ax_plot = plt.subplot2grid((2, 2), (0, 1))
+        ax_table = plt.subplot2grid((2, 2), (1, 0), colspan=2)
         
-        # Apply adaptive contrast
-        pixels         = cropped_image.flatten().astype(np.float32)
-        vmin_clip      = np.percentile(pixels, 1)
-        vmax_clip      = np.percentile(pixels, 99)
-        clipped_pixels = np.clip(pixels, vmin_clip, vmax_clip)
-        vmin           = np.percentile(clipped_pixels, 60)
-        vmax           = np.percentile(clipped_pixels, 100)
+        # Left: Image with ROIs (no cropping)
+        display_image = self.image
         
-        ax_img.imshow(cropped_image, cmap='gray', vmin=vmin, vmax=vmax)
+        # Apply adaptive contrast focused on background values
+        # Sample center region to determine background intensity
+        center_crop_size = 100
+        h, w             = display_image.shape
+        cy_center        = h // 2
+        cx_center        = w // 2
+        center_sample    = display_image[
+            cy_center - center_crop_size//2 : cy_center + center_crop_size//2,
+            cx_center - center_crop_size//2 : cx_center + center_crop_size//2
+        ]
+        bg_mean = np.mean(center_sample)
+        bg_std  = np.std(center_sample)
+        
+        # Set contrast window centered on background: mean ± 3*std
+        vmin = bg_mean - 3 * bg_std
+        vmax = bg_mean + 3 * bg_std
+        
+        ax_img.imshow(display_image, cmap='gray', vmin=vmin, vmax=vmax)
         ax_img.set_title(f"CTP515 Low-Contrast ROIs (n={self.results['n_detected']})")
         ax_img.axis('off')
         
-        # Plot phantom center (adjusted for crop)
-        cy, cx = self.center[1] - start_y, self.center[0] - start_x
-        ax_img.plot(cx, cy, 'r+', markersize=12, markeredgewidth=2)
+        # Plot phantom center (no crop adjustment needed)
+        # self.center is (x, y) = (col, row) matching codebase convention
+        center_col = self.center[0]
+        center_row = self.center[1]
+        ax_img.plot(center_col, center_row, 'r+', markersize=12, markeredgewidth=2)
+        
+        # Define color map for different ROI diameters
+        color_map = {
+            15: '#00ffff',  # cyan
+            9:  '#00ff00',  # green
+            8:  '#ffff00',  # yellow
+            7:  '#ff8800',  # orange
+            6:  '#ff00ff',  # magenta
+            5:  '#ff0000',  # red
+        }
         
         # Overlay ROIs and collect data for plotting
-        diameters = []
-        cnrs      = []
-        contrasts = []
+        diameters       = []
+        cnrs            = []
+        contrasts       = []
+        legend_handles  = []
+        legend_labels   = []
+        
+        # Draw background ROI first (in white/gray)
+        # Background ROI: 38mm from center at first angle
+        bg_dist_mm   = 35
+        bg_radius_mm = 5
+        bg_angle_deg = self.analyzer.roi_angles[0] + self.analyzer.angle_offset
+        bg_angle_rad = np.radians(bg_angle_deg)
+        spacing      = self.analyzer.pixel_spacing
+        
+        bg_dist_px   = bg_dist_mm / spacing
+        bg_radius_px = bg_radius_mm / spacing
+        
+        # Calculate background ROI position
+        cy, cx = int(self.center[1]), int(self.center[0])
+        bg_x   = cx + bg_dist_px * np.cos(bg_angle_rad)
+        bg_y   = cy - bg_dist_px * np.sin(bg_angle_rad)
+        
+        # Draw background ROI circle in white with dashed line
+        bg_color = 'red'
+        bg_circle = patches.Circle((bg_x, bg_y), bg_radius_px, edgecolor=bg_color, 
+                                   facecolor='none', linewidth=3, linestyle='-')
+        ax_img.add_patch(bg_circle)
         
         for roi_name, roi_data in self.results['blobs'].items():
-            x   = roi_data['x'] - start_x
-            y   = roi_data['y'] - start_y
-            r   = roi_data['r']
-            cnr = roi_data['cnr']
+            x        = roi_data['x']
+            y        = roi_data['y']
+            r        = roi_data['r']
+            cnr      = roi_data['cnr']
             contrast = roi_data['contrast']
             
             # Extract diameter from roi name (e.g., 'roi_15mm' -> 15)
@@ -536,23 +665,37 @@ class CTP515Plotter:
             cnrs.append(cnr)
             contrasts.append(contrast)
             
-            # Only draw if ROI is within cropped region
-            if 0 <= x < crop_size and 0 <= y < crop_size:
-                circle = patches.Circle((x, y), r, edgecolor='cyan', facecolor='none', linewidth=2)
-                ax_img.add_patch(circle)
-                ax_img.text(x, y - r - 5, f"{diameter:.0f}mm", color='cyan', fontsize=8, 
-                           ha='center', va='top', bbox=dict(facecolor='black', alpha=0.6, pad=2))
+            # Get color for this diameter
+            color = color_map.get(int(diameter), 'cyan')
+            
+            # Draw ROI circle
+            circle = patches.Circle((x, y), r, edgecolor=color, facecolor='none', linewidth=2)
+            ax_img.add_patch(circle)
+            
+            # Add to legend (only once per diameter)
+            if int(diameter) not in [int(label.split('mm')[0]) for label in legend_labels]:
+                legend_handles.append(patches.Patch(facecolor='none', edgecolor=color, linewidth=2))
+                legend_labels.append(f'{int(diameter)}mm')
+        
+        # Add background to legend after ROIs
+        legend_handles.append(patches.Patch(facecolor='none', edgecolor=bg_color, linewidth=3, linestyle='-'))
+        legend_labels.append('Background')
+        
+        # Add legend to image
+        if legend_handles:
+            ax_img.legend(legend_handles, legend_labels, loc='upper right', fontsize=10, 
+                         framealpha=0.8, title='ROI Diameter')
         
         # Right: CNR and Contrast vs. Diameter
         # Sort by diameter for proper line plotting
-        sorted_indices = np.argsort(diameters)
+        sorted_indices   = np.argsort(diameters)
         diameters_sorted = [diameters[i] for i in sorted_indices]
         cnrs_sorted      = [cnrs[i] for i in sorted_indices]
         contrasts_sorted = [contrasts[i] for i in sorted_indices]
         
         # Primary axis: CNR
-        ax_plot.plot(diameters_sorted, cnrs_sorted, 'bo-', linewidth=2, markersize=8, label='CNR')
-        ax_plot.scatter(diameters_sorted, cnrs_sorted, c='blue', s=80, zorder=3)
+        ax_plot.plot(diameters_sorted, cnrs_sorted, 'bo-', linewidth=3, markersize=8, label='CNR', alpha=0.5)
+        #ax_plot.scatter(diameters_sorted, cnrs_sorted, c='blue', s=80, zorder=3, alpha=0.5)
         ax_plot.set_xlabel('ROI Diameter (mm)', fontsize=12)
         ax_plot.set_ylabel('CNR', fontsize=12, color='blue')
         ax_plot.tick_params(axis='y', labelcolor='blue')
@@ -560,9 +703,9 @@ class CTP515Plotter:
         
         # Secondary axis: Contrast
         ax_contrast = ax_plot.twinx()
-        ax_contrast.plot(diameters_sorted, contrasts_sorted, 'ro-', linewidth=2, markersize=8, label='Contrast')
-        ax_contrast.scatter(diameters_sorted, contrasts_sorted, c='red', s=80, zorder=3)
-        ax_contrast.set_ylabel('Contrast', fontsize=12, color='red')
+        ax_contrast.plot(diameters_sorted, contrasts_sorted, 'ro-', linewidth=2, markersize=8, label='Contrast (%)', alpha=0.5)
+        #ax_contrast.scatter(diameters_sorted, contrasts_sorted, c='red', s=80, zorder=3, alpha=0.5, marker='x')
+        ax_contrast.set_ylabel('Contrast (%)', fontsize=12, color='red')
         ax_contrast.tick_params(axis='y', labelcolor='red')
         
         ax_plot.set_title('CNR and Contrast vs. ROI Diameter')
@@ -570,7 +713,60 @@ class CTP515Plotter:
         # Add legends
         lines1, labels1 = ax_plot.get_legend_handles_labels()
         lines2, labels2 = ax_contrast.get_legend_handles_labels()
-        ax_plot.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+        ax_plot.legend(lines1 + lines2, labels1 + labels2, loc='lower right', bbox_to_anchor=(1, 0))
+        
+        # Bottom: Statistics table
+        ax_table.axis('off')
+        
+        # Prepare table data
+        table_data = [['Diameter (mm)', 'Mean (HU)', 'Std (HU)', 'CNR', 'Contrast (%)']]
+        
+        # Sort ROIs by diameter for table
+        roi_list = [(float(name.split('_')[1].replace('mm', '')), name, data) 
+                    for name, data in self.results['blobs'].items()]
+        roi_list.sort(key=lambda x: x[0])
+        
+        for diameter, roi_name, roi_data in roi_list:
+            table_data.append([
+                f"{diameter:.0f}",
+                f"{roi_data['mean']:.1f}",
+                f"{roi_data['std']:.1f}",
+                f"{roi_data['cnr']:.2f}",
+                f"{roi_data['contrast']:.2f}"
+            ])
+        
+        # Add background row (get from first ROI's bg_mean and bg_std)
+        if roi_list:
+            bg_data = roi_list[0][2]  # Get first ROI data
+            table_data.append([
+                'Background',
+                f"{bg_data['bg_mean']:.1f}",
+                f"{bg_data['bg_std']:.1f}",
+                '—',
+                '—'
+            ])
+        
+        # Create table
+        table = ax_table.table(cellText=table_data, cellLoc='center', loc='center',
+                              colWidths=[0.15, 0.15, 0.15, 0.15, 0.15])
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1, 2)
+        
+        # Style header row
+        for i in range(len(table_data[0])):
+            cell = table[(0, i)]
+            cell.set_facecolor('#4CAF50')
+            cell.set_text_props(weight='bold', color='white')
+        
+        # Alternate row colors
+        for i in range(1, len(table_data)):
+            for j in range(len(table_data[0])):
+                cell = table[(i, j)]
+                if i % 2 == 0:
+                    cell.set_facecolor('#f0f0f0')
+        
+        ax_table.set_title('ROI Statistics', fontsize=12, weight='bold', pad=10)
         
         fig.tight_layout()
         return fig

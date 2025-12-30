@@ -2,14 +2,18 @@ import numpy as np
 
 class AnalyzerCTP401:
     """
-    Analyzer for CTP401.
+    Analyzer for CTP401 (linearity module with material inserts).
 
-    Performs ROI analysis on various material inserts of differing nominal HU values.
+    Performs ROI analysis on four material inserts (LDPE, Air, Teflon, Acrylic)
+    at fixed angular positions. Computes mean HU, standard deviation, and
+    low-contrast visibility (LCV) for each insert. Also derives a calibration
+    scale relating nominal material density to measured HU.
 
     Attributes:
-        image (np.ndarray)                  : 2D CT image (already slice-averaged)
-        center (tuple[float, float])        : (x, y) center of phantom in pixels
-        pixel_spacing (float)               : Pixel spacing in mm
+        image (np.ndarray): 2D CT image of the linearity module.
+        center (tuple[float, float]): (x, y) center of phantom in pixels.
+        pixel_spacing (float): Pixel spacing in mm.
+        results (dict): Analysis results populated by analyze().
     """
 
     def __init__(self, image: np.ndarray, center: tuple[float, float], pixel_spacing: float):

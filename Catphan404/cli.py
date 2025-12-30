@@ -36,15 +36,21 @@ PLOTTER_CLASSES = {
 
 
 def parse_args():
-    """Parse command-line arguments for the Catphan 404 CLI."""
+    \"\"\"
+    Parse command-line arguments for the Catphan 404 CLI.
+    
+    Returns:
+        argparse.Namespace: Parsed arguments containing image path, modules,
+                           output path, plot flags, and save directory.
+    \"\"\"
     parser = argparse.ArgumentParser(description="Catphan 404 analysis CLI")
     parser.add_argument('image', help="Path to single-slice image (DICOM, PNG, TIFF, JPG)")
     parser.add_argument(
         '--modules', '-m',
         nargs='+',
-        choices=AVAILABLE_MODULES + ['all'],
-        default=['all'],
-        help="Which analysis modules to run (default: all)"
+        choices=AVAILABLE_MODULES,
+        required=True,
+        help="Which analysis module(s) to run (required - each image corresponds to one module)"
     )
     parser.add_argument(
         '--out', '-o',
@@ -78,7 +84,7 @@ def run_cli(args):
     analyzer = Catphan404Analyzer(img, spacing=meta.get('Spacing'))
 
     # Determine which modules to run
-    modules_to_run = AVAILABLE_MODULES if 'all' in args.modules else args.modules
+    modules_to_run = args.modules
 
     # Run selected modules
     for m in modules_to_run:

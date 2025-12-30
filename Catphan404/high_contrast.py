@@ -4,24 +4,26 @@ from scipy.signal import find_peaks
 
 class HighContrastAnalyzer:
     """
-    Purpose: Analyze Catphan's CTP528 module.
+    Analyzer for Catphan's CTP528 high-contrast (line pair) module.
 
-    Order of operations:
-      - Computes line-pair center coordinates from lp radius + angles
-      - For each adjacent center pair, samples a profile between the two centers
-        using `scipy.interpolate.interpn`
-      - Derives derivative of profile, finds derivative peaks, identifies
-        local maxima/minima and computes modulation (MTF) per pair
-      - Normalizes the per-pair MTFs to produce an aggregated normalized MTF
-      - Interpolates to find MTF10/30/50/80 in lp/mm
+    Measures spatial resolution by analyzing line pair patterns at different
+    frequencies. Computes MTF (Modulation Transfer Function) from intensity
+    profiles sampled between line pair centers.
 
-    Constructor arguments mirror what `analysis_CTP528` needs, but simplified:
-      image: 2D numpy array (the single-slice image already selected/averaged)
-      pixel_spacing: mm/pixel (scalar; uses same value for x and y)
-      center: (x_pixel, y_pixel) tuple matching `outer_c` in original script
-      t_offset_deg: rotation offset in degrees (same role as `t_offset`)
-      lp_r_mm: radius in mm used in original script (default 48)
-      samples_per_segment: number of sample points between adjacent centers (default 50)
+    Workflow:
+      1. Computes line-pair center coordinates from radius and angles
+      2. Samples intensity profiles between adjacent centers using interpolation
+      3. Derives modulation from profile peak-to-trough analysis
+      4. Normalizes MTF values and aggregates across all line pairs
+      5. Determines MTF10/30/50/80 values in lp/mm
+
+    Attributes:
+        image (np.ndarray): 2D CT image of the line pair module.
+        pixel_spacing (float): Pixel spacing in mm/pixel.
+        center (tuple): (x, y) coordinates of phantom center in pixels.
+        t_offset_deg (float): Rotational offset in degrees for alignment.
+        lp_r_mm (float): Radius in mm where line pairs are located.
+        samples_per_segment (int): Number of sample points per profile.
     """
 
     def __init__(

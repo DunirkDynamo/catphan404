@@ -25,7 +25,8 @@ class UniformityAnalyzer:
 
         Args:
             image (np.ndarray): 2D CT image of the uniformity module.
-            center (tuple[float, float]): (x, y) coordinates of the phantom center in pixels.
+            center (tuple[float, float]): (x, y) = (col, row) coordinates of the phantom center in pixels.
+            spacing (np.float64): Pixel spacing in mm for scaling ROI size and offset.
         """
         self.image = image.astype(float)
         self.center = center
@@ -37,7 +38,8 @@ class UniformityAnalyzer:
 
 
         # Compute regions of interest based on initialization input.
-        cy, cx          = self.center
+        # self.center is (x, y) = (col, row), so unpack as cx, cy
+        cx, cy          = self.center
         self.roi_size   = self.roi_size/spacing
         self.roi_offset = self.roi_offset/spacing
 
@@ -45,28 +47,32 @@ class UniformityAnalyzer:
         half_size = int(self.roi_size // 2)
         offset    = int(self.roi_offset)
         # Center ROI
-        self.mc = self.image[int(cx)-half_size:int(cx)+half_size,
-                        int(cy)-half_size:int(cy)+half_size]
-        # North ROI
-        self.mn = self.image[int(cx)-half_size:int(cx)+half_size,
-                        int(cy)+offset-half_size:int(cy)+offset+half_size]
-        # South ROI
-        self.ms = self.image[int(cx)-half_size:int(cx)+half_size,
-                        int(cy)-offset-half_size:int(cy)-offset+half_size]
-        # East ROI
-        self.me = self.image[int(cx)+offset-half_size:int(cx)+offset+half_size,
-                        int(cy)-half_size:int(cy)+half_size]
-        # West ROI
-        self.mw = self.image[int(cx)-offset-half_size:int(cx)-offset+half_size,
-                        int(cy)-half_size:int(cy)+half_size]
+        self.mc = self.image[int(cy)-half_size:int(cy)+half_size,
+                        int(cx)-half_size:int(cx)+half_size]
+        # North ROI (above center = smaller row, same column)
+        self.mn = self.image[int(cy)-offset-half_size:int(cy)-offset+half_size,
+                        int(cx)-half_size:int(cx)+half_size]
+        # South ROI (below center = larger row, same column)
+        self.ms = self.image[int(cy)+offset-half_size:int(cy)+offset+half_size,
+                        int(cx)-half_size:int(cx)+half_size]
+        # East ROI (right of center = same row, larger column)
+        self.me = self.image[int(cy)-half_size:int(cy)+half_size,
+                        int(cx)+offset-half_size:int(cx)+offset+half_size]
+        # West ROI (left of center = same row, smaller column)
+        self.mw = self.image[int(cy)-half_size:int(cy)+half_size,
+                        int(cx)-offset-half_size:int(cx)-offset+half_size]
 
     def analyze(self) -> dict:
         """
-        Perform the uniformity analysis.
+        Perform the uniformity analysis on five ROIs.
+
+        Computes mean and standard deviation for each of the five ROIs (centre,
+        north, south, east, west) and calculates the overall uniformity metric
+        as the percent difference between max and min mean values.
 
         Returns:
-            dict: JSON-compatible dictionary containing mean, standard deviation
-                  for each ROI and the overall uniformity metric.
+            dict: JSON-compatible dictionary with keys for each ROI containing
+                  'mean' and 'std', plus 'uniformity' (percentage).
         """
 
 

@@ -69,14 +69,25 @@ def _read_imageio(path: str) -> Tuple[np.ndarray, dict]:
 
 
 def load_image(path: str) -> Tuple[np.ndarray, dict]:
-    """Load an image file (DICOM or standard image format).
+    \"\"\"
+    Load an image file (DICOM or standard image format).
+
+    Automatically detects format based on file extension. DICOM files are
+    read with pydicom (with metadata extraction), while other formats use
+    imageio. Handles both explicit .dcm/.dicom extensions and DICOM files
+    without standard extensions.
 
     Args:
         path (str): File path to load.
 
     Returns:
-        Tuple[np.ndarray, dict]: The image and metadata dictionary.
-    """
+        Tuple[np.ndarray, dict]: Image array and metadata dictionary.
+                                Metadata includes 'Spacing', 'SliceThickness',
+                                and 'Modality' for DICOM files, empty dict otherwise.
+
+    Raises:
+        ImportError: If required package (pydicom or imageio) is not installed.
+    \"\"\"
     lower = path.lower()
     if lower.endswith('.dcm') or lower.endswith('.dicom'):
         return _read_dicom(path)

@@ -8,7 +8,7 @@ Overview
 - Key entry points: `Catphan404.Catphan404Analyzer` (central orchestrator), CLI `catphan404` (`catphan404.cli:main`), and plotting helpers under `Catphan404/plots/plotters.py`.
 
 Important files & directories
-- `Catphan404/analysis.py` — `Catphan404Analyzer` exposes `run_<module>()` methods (e.g. `run_uniformity`, `run_high_contrast`, `run_ctp401`) and `run_all()`.
+- `Catphan404/analysis.py` — `Catphan404Analyzer` exposes `run_<module>()` methods (e.g. `run_uniformity`, `run_high_contrast`, `run_ctp401`, `run_ctp515`).
 - `Catphan404/io.py` — `load_image(path)` handles DICOM (requires `pydicom`) and other images (requires `imageio`). It returns `(image_array, metadata_dict)`.
 - `Catphan404/*_analyzer.py` — individual analyzer classes (e.g. `UniformityAnalyzer`, `HighContrastAnalyzer`, `AnalyzerCTP401`) implement `analyze()` and usually populate `self.results`.
 - `Catphan404/plots/plotters.py` — plotter classes accept analyzer objects and create `matplotlib` `Figure` objects (return `fig`).
@@ -36,7 +36,7 @@ Common pitfalls & repo-specific gotchas
 
 Developer workflows / commands
 - Quick manual run (requires dependencies installed):
-  - From repo root: `python -m Catphan404.cli path/to/slice.dcm -m all --plot --save-plot outdir`
+  - From repo root: `python -m Catphan404.cli path/to/slice.dcm -m uniformity --plot --save-plot outdir`
   - If package is installed (entry point): `catphan404 path/to/slice.dcm -m ctp401 --out ctp401.json`
 - Programmatic use (example):
   ```python

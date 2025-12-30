@@ -2,24 +2,25 @@ from typing import Optional, Tuple, Dict, Any
 import numpy as np
 import json
 from .uniformity import UniformityAnalyzer
-from .geometry import GeometryAnalyzer
 from .high_contrast import HighContrastAnalyzer
 from .ctp401_analyzer import AnalyzerCTP401
 from .ctp515_analyzer import AnalyzerCTP515
-from .slice_thickness import SliceThicknessAnalyzer
 from pathlib import Path
 
 
 class Catphan404Analyzer:
     """
-    Central analyzer for Catphan 404 phantom.
+    Central coordinator for Catphan 404 phantom analysis.
 
-    Can run individual analysis modules or all of them using `run_all()`.
+    Orchestrates analysis of individual phantom modules (uniformity, high-contrast,
+    linearity, low-contrast) on single-slice CT images. Each module is run via
+    a dedicated run_* method that initializes the appropriate analyzer, executes
+    analysis, and stores results.
 
     Attributes:
-        image (np.ndarray): Input image.
-        spacing (Optional[Tuple[float, float]]): Pixel spacing.
-        results (dict): Dictionary storing results of each module.
+        image (np.ndarray): Input 2D CT image.
+        spacing (Optional[Tuple[float, float]]): Pixel spacing (x, y) in mm.
+        results (dict): Dictionary storing JSON-compatible results from each module.
     """
 
     def __init__(self, image: np.ndarray, spacing: Optional[Tuple[float, float]] = None):
@@ -37,8 +38,15 @@ class Catphan404Analyzer:
     # ------------------ Existing uniformity / CT-number ------------------
     def run_uniformity(self):
         """
-        Run the uniformity analysis using the UniformityAnalyzer.
-        Populates self.results['uniformity'] with the computed statistics.
+        Run uniformity analysis (CTP486 module).
+
+        Estimates phantom center, creates UniformityAnalyzer instance,
+        analyzes five ROIs, and stores results. Also stores the detected
+        center for use by other modules.
+
+        Populates:
+            self.results['uniformity']: ROI statistics and uniformity metric.
+            self.results['center']: Detected (x, y) center coordinates.
         """
         # Estimate phantom center from the image
         cy, cx = self._estimate_center(self.image)
@@ -59,7 +67,13 @@ class Catphan404Analyzer:
     # ------------------ High Contrast Module (Line pairs) ----------------
     def run_high_contrast(self):
         """
-        Run high-contrast (CTP528) analysis.
+        Run high-contrast line pair analysis (CTP528 module).
+
+        Analyzes spatial resolution by measuring MTF from line pair patterns.
+        Uses center from uniformity analysis if available, otherwise estimates it.
+
+        Populates:
+            self.results['high_contrast']: MTF curve data and resolution metrics.
         """
 
         # Use center from uniformity analysis if available
@@ -87,7 +101,16 @@ class Catphan404Analyzer:
     # --------------  Linearity Module (HU material inserts) --------------
     def run_ctp401(self, t_offset: float = 0):
         """
-        Run CTP401 material / scaling analysis.
+        Run linearity/scaling analysis (CTP401 module).
+
+        Analyzes material insert ROIs to measure HU values for different
+        materials (LDPE, Air, Teflon, Acrylic) and derives a calibration scale.
+
+        Args:
+            t_offset (float): Rotational offset in degrees for ROI positioning.
+
+        Populates:
+            self.results['ctp401']: Material ROI statistics and calibration data.
         """
 
 
@@ -118,16 +141,36 @@ class Catphan404Analyzer:
 
     # ------------------ As yet undeveloped modules ---------------- 
 
-    def run_ctp515(self):
-        """Run CTP515 low-contrast detectability analysis."""
-        # Use center from uniformity analysis if available
-        center = self.results.get('center', None)
-        if center is None:
-            cy, cx = self._estimate_center(self.image)
-            center = (cy, cx)
+    def run_ctp515(self, crop_x=150, crop_y=150):
+        """
+        Run low-contrast detectability analysis (CTP515 module).
 
-        spacing = self.spacing[0] if self.spacing else 1.0
-        analyzer = AnalyzerCTP515(self.image, center, spacing)
+        Detects low-contrast inserts of varying diameters and computes CNR
+        and contrast values to assess detectability. Uses geometric center
+        of potentially cropped image.
+
+        Args:
+            crop_x (int): Number of pixels to crop from left and right edges.
+            crop_y (int): Number of pixels to crop from top and bottom edges.
+
+        Populates:
+            self.results['ctp515']: Low-contrast ROI statistics, CNR, and contrast values.
+        """
+        """
+        # Crop the image if requested
+        if crop_x > 0 or crop_y > 0:
+            h, w = self.image.shape
+            cropped_image = self.image[crop_y:h-crop_y, crop_x:w-crop_x]
+            # Adjust center for cropped image
+            cy, cx = cropped_image.shape[0] // 2, cropped_image.shape[1] // 2
+        else:
+            cropped_image = self.image
+            cy, cx = self.image.shape[0] // 2, self.image.shape[1] // 2
+        
+        center = (cx, cy)  # Store as (x, y) = (col, row)
+
+        spacing  = self.spacing[0] if self.spacing else 1.0
+        analyzer = AnalyzerCTP515(cropped_image, center, spacing, angle_offset=-7.5)
         
         # Store the results of the analysis:
         res = analyzer.analyze()
@@ -142,21 +185,20 @@ class Catphan404Analyzer:
         self.results['slice_thickness'] = analyzer.analyze()
 
 
-    # ------------------ Run all modules ------------------
-    def run_all(self):
-        """
-        Run all available analysis modules in sequence and aggregate results.
-        """
-        self.run_uniformity()
-        self.run_high_contrast()
-        self.run_ctp515_analyzer()
-        self.run_slice_thickness()
-        self.run_geometry()
-        return self.results
-
     # ------------------ Helper functions ------------------
     def _estimate_center(self, img: np.ndarray) -> Tuple[int, int]:
-        """Estimate phantom center using intensity-weighted center of mass."""
+        """
+        Estimate phantom center using intensity-weighted center of mass.
+
+        Applies Gaussian smoothing, thresholds at median, and computes the
+        center of mass of the resulting binary mask.
+
+        Args:
+            img (np.ndarray): Input 2D image.
+
+        Returns:
+            Tuple[int, int]: (row, col) center coordinates in pixels.
+        """
         from scipy import ndimage
         sm = ndimage.gaussian_filter(img, sigma=3)
         thresh = np.percentile(sm, 50)

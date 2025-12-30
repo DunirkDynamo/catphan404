@@ -6,35 +6,36 @@
 from typing import Dict, Tuple
 import numpy as np
 import math
-from .utils.image import detect_blobs, circular_roi_mask
+from .utils.image import circular_roi_mask
 
 
 class AnalyzerCTP515:
     """
-    Class-based low-contrast detectability analysis for Catphan 401.
+    Low-contrast detectability analyzer for Catphan CTP515 module.
 
-    This analyzer detects small, low-contrast inserts (blobs) in the phantom
-    and computes Contrast-to-Noise Ratio (CNR) for each, quantifying how
-    detectable they are against background noise.
+    Detects and analyzes six low-contrast circular inserts of varying diameters
+    (15, 9, 8, 7, 6, 5 mm) positioned at fixed angles and distance from center.
+    Computes Contrast-to-Noise Ratio (CNR) and contrast percentage for each ROI
+    relative to a background region.
 
-    "Sets" of inserts, defined by their nominal contrast, include multiple 
-    inserts of differing diameters. That is, for each nominal contrast value, 
-    multiple ROIs exist as inserts of different diameters.
+    CNR quantifies detectability: higher values indicate the insert is more
+    easily distinguished from background noise.
 
     Attributes:
-        image (np.ndarray)                  : 2D CT image
-        center (tuple[float, float])        : (x, y) center of phantom in pixels
-        pixel_spacing float)                : Pixel spacing in mm
+        image (np.ndarray): 2D CT image of the low-contrast module.
+        center (tuple[float, float]): (x, y) center of phantom in pixels.
+        pixel_spacing (float): Pixel spacing in mm.
+        results (dict): Analysis results populated by analyze().
     """
 
     # Attributes common to ALL instances of the class:
     roi_angles = [
             -87.4 + 180,
-            -69.1 + 180,
-            -52.7 + 180,
-            -38.5 + 180,
-            -25.1 + 180,
-            -12.9 + 180,
+            -105.7 + 180, #-69.1 + 180,
+            -122.1 + 180, # -52.7 + 180,
+            -136.3 + 180, # -38.5 + 180,
+            -149.7 + 180, #-25.1 + 180,
+            -161.9 + 180, # -12.9 + 180,
         ]
     roi_dist_mm   = 50
     roi_radius_mm = [6, 3.5, 3, 2.5, 2, 1.5]
@@ -123,16 +124,17 @@ class AnalyzerCTP515:
                   Each blob entry has position, size, means, std, and CNR.
         """
         # Get image dimensions and center coordinates
+        # center is passed as (x, y) = (col, row) from analysis.py
         ny, nx = self.image.shape
         cy, cx = int(self.center[1]), int(self.center[0])
-
+        #self.pixel_spacing = 1
         # Initialize results dictionary
         results = {}
         
         # Compute background statistics from a common background ROI
         # Background ROI: 38mm from center, 12mm diameter (6mm radius)
-        bg_dist_mm   = 38.0
-        bg_radius_mm = 6.0
+        bg_dist_mm   = 35
+        bg_radius_mm = 5
         bg_angle_deg = self.roi_angles[0] + self.angle_offset  # Use first angle for background
         bg_angle_rad = math.radians(bg_angle_deg)
         
@@ -140,7 +142,7 @@ class AnalyzerCTP515:
         bg_dist_px   = bg_dist_mm / self.pixel_spacing
         bg_radius_px = bg_radius_mm / self.pixel_spacing
         bg_x         = cx + bg_dist_px * math.cos(bg_angle_rad)
-        bg_y         = cy + bg_dist_px * math.sin(bg_angle_rad)
+        bg_y         = cy - bg_dist_px * math.sin(bg_angle_rad)
         
         # Create background mask and extract values
         mask_bg = circular_roi_mask(self.image.shape, (bg_x, bg_y), bg_radius_px)
@@ -160,13 +162,15 @@ class AnalyzerCTP515:
             radius_mm   = roi_specs["radius"]
             
             # Convert to pixels
+            
             distance_px = distance_mm / self.pixel_spacing
-            radius_px = radius_mm / self.pixel_spacing
+            radius_px   = radius_mm / self.pixel_spacing
             
             # Calculate ROI center position
+            # Note: In image coordinates, y increases downward, so we negate sin
             angle_rad = math.radians(angle_deg)
             x_full    = cx + distance_px * math.cos(angle_rad)
-            y_full    = cy + distance_px * math.sin(angle_rad)
+            y_full    = cy - distance_px * math.sin(angle_rad)
             
             # Create circular ROI mask
             mask = circular_roi_mask(self.image.shape, (x_full, y_full), radius_px)
@@ -181,17 +185,19 @@ class AnalyzerCTP515:
             std_signal  = float(np.std(vals))
             
 
-            # Contrast: relative difference between signal and background magnitudes:
-            contrast = abs(mean_signal - mean_bg) / (abs(mean_bg) + 1e-8)
+            # Contrast: percentage difference from background
+            # Positive = brighter than background, Negative = darker
+            contrast = ((mean_signal - mean_bg) / mean_bg) * 100.0
 
             # Contrast-to-Noise Ratio: measures detectability
             # Higher CNR means the ROI is more visible
             cnr = abs(mean_signal - mean_bg) / (std_bg + 1e-8)
             
             # Store results for this ROI
-            x_delta = int(x_full - cx)
-            y_delta = int(y_full - cy)
-            r_delta = (x_delta**2 + y_delta**2)**0.5
+            # Keep deltas as floats for accurate distance calculation
+            x_delta = float(x_full - cx)
+            y_delta = float(y_full - cy)
+            r_delta = float((x_delta**2 + y_delta**2)**0.5)
             
             results[f'roi_{roi_name}mm'] = {
                 'x'       : int(x_full),

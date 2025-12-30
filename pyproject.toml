@@ -10,7 +10,8 @@ authors = [
     { name = "Oz", email = "jacgwat@gmail.com" }
 ]
 readme = "README.md"
-license = { text = "MIT" }   # Change if needed
+license = { text = "MIT" }
+requires-python = ">=3.9"
 
 # Core dependencies for the package itself
 dependencies = [
@@ -18,9 +19,15 @@ dependencies = [
     "scipy",
     "pydicom",
     "matplotlib",
+    "pathlib",
+    "imageio",  # Needed for CLI image loading
 ]
-
-requires-python = ">=3.9"
 
 [project.urls]
 Homepage = "https://github.com/your/repo"   # optional
+
+# -----------------------------
+# CLI entry point
+# -----------------------------
+[project.scripts]
+catphan404 = "catphan404.cli:main"

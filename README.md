@@ -11,7 +11,7 @@ slices. Ready for Sphinx documentation generation.
 from catphan404 import load_image, Catphan404Analyzer
 img, meta = load_image('catphan_slice.dcm')
 ana = Catphan404Analyzer(img, spacing=meta.get('Spacing'))
-res = ana.run_all()
+ana.run_uniformity()  # or run_high_contrast(), run_ctp401(), run_ctp515(), etc.
 print(res)
 ```
 

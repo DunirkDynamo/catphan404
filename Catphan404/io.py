@@ -36,8 +36,8 @@ def _read_dicom(path: str) -> Tuple[np.ndarray, dict]:
         raise ImportError("pydicom required to read DICOM files. Install with 'pip install pydicom'.")
     ds = pydicom.dcmread(path)
     arr = ds.pixel_array.astype(float)
-    if hasattr(ds, "RescaleIntercept") and hasattr(ds, "RescaleSlope"):
-        arr = arr * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
+    #if hasattr(ds, "RescaleIntercept") and hasattr(ds, "RescaleSlope"):
+     #   arr = arr * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
     meta = {
         "Spacing": getattr(ds, 'PixelSpacing', None),
         "SliceThickness": getattr(ds, 'SliceThickness', None),
@@ -69,15 +69,40 @@ def _read_imageio(path: str) -> Tuple[np.ndarray, dict]:
 
 
 def load_image(path: str) -> Tuple[np.ndarray, dict]:
-    """Load an image file (DICOM or standard image format).
+    \"\"\"
+    Load an image file (DICOM or standard image format).
+
+    Automatically detects format based on file extension. DICOM files are
+    read with pydicom (with metadata extraction), while other formats use
+    imageio. Handles both explicit .dcm/.dicom extensions and DICOM files
+    without standard extensions.
 
     Args:
         path (str): File path to load.
 
     Returns:
-        Tuple[np.ndarray, dict]: The image and metadata dictionary.
-    """
+        Tuple[np.ndarray, dict]: Image array and metadata dictionary.
+                                Metadata includes 'Spacing', 'SliceThickness',
+                                and 'Modality' for DICOM files, empty dict otherwise.
+
+    Raises:
+        ImportError: If required package (pydicom or imageio) is not installed.
+    \"\"\"
     lower = path.lower()
     if lower.endswith('.dcm') or lower.endswith('.dicom'):
         return _read_dicom(path)
-    return _read_imageio(path)
+    
+
+    ds = pydicom.dcmread(path, force=True)
+    ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+
+    arr = ds.pixel_array.astype(float)
+    #if hasattr(ds, "RescaleIntercept") and hasattr(ds, "RescaleSlope"):
+     #   arr = arr * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
+    meta = {
+        "Spacing": getattr(ds, 'PixelSpacing', None),
+        "SliceThickness": getattr(ds, 'SliceThickness', None),
+        "Modality": getattr(ds, 'Modality', None)
+    }
+    return arr, meta
+    #return _read_imageio(path)

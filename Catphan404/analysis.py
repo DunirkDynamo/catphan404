@@ -1,124 +1,205 @@
-# -----------------------------
-# File: catphan404/analysis.py
-# -----------------------------
-# analysis.py
-
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 import numpy as np
-from scipy import ndimage
-from . import io  # Keep io import for image loading convenience
+import json
+from .uniformity import UniformityAnalyzer
+from .high_contrast import HighContrastAnalyzer
+from .ctp401_analyzer import AnalyzerCTP401
+from .ctp515_analyzer import AnalyzerCTP515
+from pathlib import Path
+
 
 class Catphan404Analyzer:
     """
-    Analyzer for a single slice containing the Catphan 404 phantom.
+    Central coordinator for Catphan 404 phantom analysis.
 
-    This class computes standard uniformity and CT-number metrics,
-    and can be extended to include other analysis modules.
-
-    Example:
-        ```python
-        from catphan404 import Catphan404Analyzer, io
-        img, meta = io.load_image('catphan_slice.dcm')
-        analyzer = Catphan404Analyzer(img, spacing=meta.get('Spacing'))
-        analyzer.run_all()
-        print(analyzer.results)
-        ```
+    Orchestrates analysis of individual phantom modules (uniformity, high-contrast,
+    linearity, low-contrast) on single-slice CT images. Each module is run via
+    a dedicated run_* method that initializes the appropriate analyzer, executes
+    analysis, and stores results.
 
     Attributes:
-        image (np.ndarray): Image array.
-        spacing (Optional[Tuple[float, float]]): Pixel spacing (mm).
-        results (dict): Dictionary of computed results.
+        image (np.ndarray): Input 2D CT image.
+        spacing (Optional[Tuple[float, float]]): Pixel spacing (x, y) in mm.
+        results (dict): Dictionary storing JSON-compatible results from each module.
     """
 
     def __init__(self, image: np.ndarray, spacing: Optional[Tuple[float, float]] = None):
-        """Initialize the analyzer.
+        """Initialize analyzer."""
+        self.image                   = np.array(image, dtype=float)
+        self.spacing                 = (float(spacing[0]), float(spacing[1])) if spacing else None
+        self.results: Dict[str, Any] = {}
+
+        # Store actual analyzer objects for plotting:
+        self._uniformity_analyzer    = None
+        self._high_contrast_analyzer = None
+        self._ctp401_analyzer        = None
+        self._ctp515_analyzer        = None
+
+    # ------------------ Existing uniformity / CT-number ------------------
+    def run_uniformity(self):
+        """
+        Run uniformity analysis (CTP486 module).
+
+        Estimates phantom center, creates UniformityAnalyzer instance,
+        analyzes five ROIs, and stores results. Also stores the detected
+        center for use by other modules.
+
+        Populates:
+            self.results['uniformity']: ROI statistics and uniformity metric.
+            self.results['center']: Detected (x, y) center coordinates.
+        """
+        # Estimate phantom center from the image
+        cy, cx = self._estimate_center(self.image)
+
+        # Initialize the uniformity analyzer with image and center
+        analyzer = UniformityAnalyzer(self.image, (cx, cy), self.spacing[0])
+
+        # Run analysis and store results
+        self.results['uniformity'] = analyzer.analyze()
+
+        # Also store center for reference
+        self.results['center'] = (float(cx), float(cy))
+
+        # Store the analyzer:
+        self._uniformity_analyzer = analyzer
+
+
+    # ------------------ High Contrast Module (Line pairs) ----------------
+    def run_high_contrast(self):
+        """
+        Run high-contrast line pair analysis (CTP528 module).
+
+        Analyzes spatial resolution by measuring MTF from line pair patterns.
+        Uses center from uniformity analysis if available, otherwise estimates it.
+
+        Populates:
+            self.results['high_contrast']: MTF curve data and resolution metrics.
+        """
+
+        # Use center from uniformity analysis if available
+        center = self.results.get('center', None)
+        if center is None:
+            cy, cx = self._estimate_center(self.image)
+            center = (cy, cx)
+
+        spacing = self.spacing[0] if self.spacing else 1.0
+
+        analyzer = HighContrastAnalyzer(
+            image=self.image,
+            center=center,      # Important
+            pixel_spacing=spacing
+        )
+
+
+        # Store the results of the analysis:
+        res = analyzer.analyze()
+        self.results['high_contrast'] = res
+
+        # Store the analyzer:
+        self._high_contrast_analyzer = analyzer
+
+    # --------------  Linearity Module (HU material inserts) --------------
+    def run_ctp401(self, t_offset: float = 0):
+        """
+        Run linearity/scaling analysis (CTP401 module).
+
+        Analyzes material insert ROIs to measure HU values for different
+        materials (LDPE, Air, Teflon, Acrylic) and derives a calibration scale.
 
         Args:
-            image (np.ndarray): Input image array.
-            spacing (Optional[Tuple[float, float]]): Pixel spacing in mm (row, col).
+            t_offset (float): Rotational offset in degrees for ROI positioning.
+
+        Populates:
+            self.results['ctp401']: Material ROI statistics and calibration data.
         """
-        self.image = np.array(image, dtype=float)
-        self.spacing: Optional[Tuple[float, float]] = None
-        if spacing is not None:
-            try:
-                self.spacing = (float(spacing[0]), float(spacing[1]))
-            except Exception:
-                pass
-        self.results: Dict = {}
 
-    def analyze(self) -> Dict:
+
+        # Use center from uniformity analysis if available
+        center = self.results.get('center', None)
+        if center is None:
+            cy, cx = self._estimate_center(self.image)
+            center = (cy, cx)
+
+        spacing = self.spacing[0] if self.spacing else 1.0
+
+        analyzer = AnalyzerCTP401(
+            image=self.image,
+            center=center,      # Important
+            pixel_spacing=spacing
+        )
+
+
+        # Store the results of the analysis:
+        res = analyzer.analyze()
+        self.results['ctp401'] = res
+
+        # Store the analyzer:
+        self._ctp401_analyzer = analyzer
+
+
+
+
+    # ------------------ As yet undeveloped modules ---------------- 
+
+    def run_ctp515(self, crop_x=150, crop_y=150):
         """
-        Perform basic Catphan 404 analysis (uniformity + CT-number inserts).
+        Run low-contrast detectability analysis (CTP515 module).
 
-        Returns:
-            dict: Computed metrics for uniformity and CT-number inserts.
+        Detects low-contrast inserts of varying diameters and computes CNR
+        and contrast values to assess detectability. Uses geometric center
+        of potentially cropped image.
+
+        Args:
+            crop_x (int): Number of pixels to crop from left and right edges.
+            crop_y (int): Number of pixels to crop from top and bottom edges.
+
+        Populates:
+            self.results['ctp515']: Low-contrast ROI statistics, CNR, and contrast values.
         """
-        return self._run_uniformity() | self._run_ct_number()
-
-    def run_all(self) -> Dict:
         """
-        Run the full suite of Catphan 404 analyses.
+        # Crop the image if requested
+        if crop_x > 0 or crop_y > 0:
+            h, w = self.image.shape
+            cropped_image = self.image[crop_y:h-crop_y, crop_x:w-crop_x]
+            # Adjust center for cropped image
+            cy, cx = cropped_image.shape[0] // 2, cropped_image.shape[1] // 2
+        else:
+            cropped_image = self.image
+            cy, cx = self.image.shape[0] // 2, self.image.shape[1] // 2
+        
+        center = (cx, cy)  # Store as (x, y) = (col, row)
 
-        Returns:
-            dict: Results dictionary including all analysis modules.
-        """
-        self.results.clear()
-        # Currently we only have uniformity + CT-number; can extend later
-        self.results.update(self._run_uniformity())
-        self.results.update(self._run_ct_number())
-        return self.results
+        spacing  = self.spacing[0] if self.spacing else 1.0
+        analyzer = AnalyzerCTP515(cropped_image, center, spacing, angle_offset=-7.5)
+        
+        # Store the results of the analysis:
+        res = analyzer.analyze()
+        self.results['ctp515'] = res
 
-    # -------------------------
-    # Internal helper routines
-    # -------------------------
+        # Store the analyzer:
+        self._ctp515_analyzer = analyzer
 
-    def _run_uniformity(self) -> Dict:
-        """Compute uniformity ROIs and deviations."""
-        img = self.image
-        cy, cx = self._estimate_center(img)
-        radius = min(img.shape) * 0.15
-        rois = self._make_circular_rois((cx, cy), radius, img.shape)
-        roi_stats = {}
-        for name, mask in rois.items():
-            vals = img[mask]
-            roi_stats[name] = {
-                'mean': float(np.nanmean(vals)),
-                'std': float(np.nanstd(vals)),
-                'count': int(vals.size)
-            }
+    def run_slice_thickness(self):
+        """Run slice thickness (FWHM) analysis."""
+        analyzer = SliceThicknessAnalyzer(self.image)
+        self.results['slice_thickness'] = analyzer.analyze()
 
-        center_mean = roi_stats['center']['mean']
-        deviations = {k: abs(v['mean'] - center_mean) for k, v in roi_stats.items()}
 
-        return {
-            'center': (float(cx), float(cy)),
-            'uniformity_rois': roi_stats,
-            'uniformity_deviations': deviations,
-            'max_uniformity_deviation': float(max(deviations.values()))
-        }
-
-    def _run_ct_number(self) -> Dict:
-        """Compute CT-number insert ROIs."""
-        img = self.image
-        cy, cx = self._estimate_center(img)
-        radius = min(img.shape) * 0.15 * 2.2  # larger ring for inserts
-        inserts = self._estimate_ct_number_rois((cx, cy), radius, img.shape)
-        insert_stats = {}
-        for i, mask in enumerate(inserts):
-            vals = img[mask]
-            insert_stats[f'insert_{i+1}'] = {
-                'mean': float(np.nanmean(vals)),
-                'std': float(np.nanstd(vals)),
-                'count': int(vals.size)
-            }
-        return {'ct_number_rois': insert_stats}
-
-    # -------------------------
-    # Internal geometry helpers
-    # -------------------------
-
+    # ------------------ Helper functions ------------------
     def _estimate_center(self, img: np.ndarray) -> Tuple[int, int]:
-        """Estimate phantom center using intensity-weighted COM."""
+        """
+        Estimate phantom center using intensity-weighted center of mass.
+
+        Applies Gaussian smoothing, thresholds at median, and computes the
+        center of mass of the resulting binary mask.
+
+        Args:
+            img (np.ndarray): Input 2D image.
+
+        Returns:
+            Tuple[int, int]: (row, col) center coordinates in pixels.
+        """
+        from scipy import ndimage
         sm = ndimage.gaussian_filter(img, sigma=3)
         thresh = np.percentile(sm, 50)
         bw = sm > thresh
@@ -126,34 +207,34 @@ class Catphan404Analyzer:
         if np.isnan(com[0]):
             return img.shape[0] // 2, img.shape[1] // 2
         return int(com[0]), int(com[1])
+    
 
-    def _make_circular_rois(self, center_xy: Tuple[float, float], radius: float, shape: Tuple[int, int]) -> Dict[str, np.ndarray]:
-        """Generate circular ROIs for uniformity analysis."""
-        cx, cy = center_xy
-        ny, nx = shape
-        Y, X = np.ogrid[:ny, :nx]
-        dist = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
-        masks = {
-            'center': dist <= (radius * 0.5),
-            'right': (dist <= radius) & (X > cx + radius * 0.3),
-            'left': (dist <= radius) & (X < cx - radius * 0.3),
-            'top': (dist <= radius) & (Y < cy - radius * 0.3),
-            'bottom': (dist <= radius) & (Y > cy + radius * 0.3),
-        }
-        return masks
+    def save_results_json(self, path):
+        """
+        Save all collected analysis results to a JSON file.
 
-    def _estimate_ct_number_rois(self, center_xy: Tuple[float, float], ring_radius: float, shape: Tuple[int, int]) -> list[np.ndarray]:
-        """Generate approximate CT-number insert ROIs."""
-        cx, cy = center_xy
-        ny, nx = shape
-        n_inserts = 8
-        roi_radius = int(min(nx, ny) * 0.03)
-        masks = []
-        angles = np.linspace(0, 2 * np.pi, n_inserts, endpoint=False)
-        Y, X = np.ogrid[:ny, :nx]
-        for ang in angles:
-            rx = cx + ring_radius * np.cos(ang)
-            ry = cy + ring_radius * np.sin(ang)
-            dist = np.sqrt((X - rx) ** 2 + (Y - ry) ** 2)
-            masks.append(dist <= roi_radius)
-        return masks
+        Args:
+            path (str | Path): Where to save the JSON output.
+
+        Raises:
+            ValueError: If no analysis results exist yet.
+            OSError: If writing the file fails.
+        """
+        if not self.results:
+            raise ValueError(
+                "No results available. Run at least one analysis module before saving."
+            )
+
+        out_path = Path(path)
+
+        # Create parent directory if needed
+        if out_path.parent != Path('.'):
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with open(out_path, 'w', encoding='utf-8') as f:
+                json.dump(self.results, f, indent=2)
+        except OSError as e:
+            raise OSError(f"Failed to write JSON to {out_path}: {e}")
+
+        return out_path

@@ -6,8 +6,11 @@
 Supports single-slice DICOM images via ``pydicom`` and common image formats
 (TIFF, PNG, JPG) via ``imageio``.
 """
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict
 import numpy as np
+from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog
 
 try:
     import pydicom
@@ -106,3 +109,95 @@ def load_image(path: str) -> Tuple[np.ndarray, dict]:
     }
     return arr, meta
     #return _read_imageio(path)
+
+
+def select_dicom_folder() -> Optional[str]:
+    """Open a folder selection dialog to choose a DICOM directory.
+    
+    Returns:
+        Optional[str]: Path to the selected folder, or None if cancelled.
+    """
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+    root.attributes('-topmost', True)  # Bring dialog to front
+    
+    folder_path = filedialog.askdirectory(
+        title="Select DICOM Folder",
+        mustexist=True
+    )
+    
+    root.destroy()
+    return folder_path if folder_path else None
+
+
+def load_dicom_series(folder_path: str) -> List[Dict[str, any]]:
+    """Load all DICOM files from a folder.
+    
+    Args:
+        folder_path (str): Path to folder containing DICOM files.
+    
+    Returns:
+        List[Dict]: List of dictionaries, each containing:
+            - 'image': np.ndarray pixel array
+            - 'metadata': dict with Spacing, SliceThickness, Modality
+            - 'path': str path to the DICOM file
+            - 'instance_number': int slice/instance number (if available)
+    
+    Raises:
+        ImportError: If pydicom is not installed.
+        ValueError: If no valid DICOM files found in folder.
+    """
+    if pydicom is None:
+        raise ImportError("pydicom required to read DICOM files. Install with 'pip install pydicom'.")
+    
+    folder = Path(folder_path)
+    if not folder.exists():
+        raise ValueError(f"Folder does not exist: {folder_path}")
+    
+    # Find all potential DICOM files (common extensions and no extension)
+    dicom_files = []
+    for ext in ['*.dcm', '*.dicom', '*.DCM', '*.DICOM']:
+        dicom_files.extend(folder.glob(ext))
+    
+    # Also try files without extension (common for DICOM)
+    for file in folder.iterdir():
+        if file.is_file() and file.suffix == '':
+            dicom_files.append(file)
+    
+    # Remove duplicates
+    dicom_files = list(set(dicom_files))
+    
+    # Load each DICOM file
+    series = []
+    for file_path in dicom_files:
+        try:
+            ds = pydicom.dcmread(str(file_path))
+            arr = ds.pixel_array.astype(float)
+            
+            # Extract metadata
+            meta = {
+                "Spacing": getattr(ds, 'PixelSpacing', None),
+                "SliceThickness": getattr(ds, 'SliceThickness', None),
+                "Modality": getattr(ds, 'Modality', None),
+                "InstanceNumber": getattr(ds, 'InstanceNumber', None),
+                "SliceLocation": getattr(ds, 'SliceLocation', None)
+            }
+            
+            series.append({
+                'image': arr,
+                'metadata': meta,
+                'path': str(file_path),
+                'instance_number': meta.get('InstanceNumber', 0)
+            })
+        except Exception as e:
+            # Skip files that can't be read as DICOM
+            print(f"Warning: Could not read {file_path} as DICOM: {e}")
+            continue
+    
+    if not series:
+        raise ValueError(f"No valid DICOM files found in {folder_path}")
+    
+    # Sort by instance number
+    series.sort(key=lambda x: x['instance_number'] or 0)
+    
+    return series

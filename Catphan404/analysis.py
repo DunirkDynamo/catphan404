@@ -13,20 +13,49 @@ class Catphan404Analyzer:
     Central coordinator for Catphan 404 phantom analysis.
 
     Orchestrates analysis of individual phantom modules (uniformity, high-contrast,
-    linearity, low-contrast) on single-slice CT images. Each module is run via
-    a dedicated run_* method that initializes the appropriate analyzer, executes
-    analysis, and stores results.
+    linearity, low-contrast) on DICOM series. Each module is run via
+    a dedicated run_* method that selects the appropriate slice, initializes
+    the analyzer, executes analysis, and stores results.
 
     Attributes:
-        image (np.ndarray): Input 2D CT image.
+        dicom_series (list): List of DICOM slice dictionaries from load_dicom_series().
+        image (np.ndarray): Currently selected 2D CT image (for backwards compatibility).
         spacing (Optional[Tuple[float, float]]): Pixel spacing (x, y) in mm.
         results (dict): Dictionary storing JSON-compatible results from each module.
     """
 
-    def __init__(self, image: np.ndarray, spacing: Optional[Tuple[float, float]] = None):
-        """Initialize analyzer."""
-        self.image                   = np.array(image, dtype=float)
-        self.spacing                 = (float(spacing[0]), float(spacing[1])) if spacing else None
+    def __init__(self, dicom_series=None, image: np.ndarray = None, spacing: Optional[Tuple[float, float]] = None):
+        """Initialize analyzer with DICOM series or single image.
+        
+        Args:
+            dicom_series (list, optional): List of DICOM dictionaries from load_dicom_series().
+            image (np.ndarray, optional): Single 2D image (for backwards compatibility).
+            spacing (Optional[Tuple[float, float]], optional): Pixel spacing in mm.
+        
+        Note:
+            Either dicom_series or image must be provided.
+        """
+        if dicom_series is None and image is None:
+            raise ValueError("Either dicom_series or image must be provided")
+        
+        # Store the DICOM series
+        self.dicom_series = dicom_series
+        
+        # For backwards compatibility, support single image input
+        if image is not None:
+            self.image = np.array(image, dtype=float)
+            self.spacing = (float(spacing[0]), float(spacing[1])) if spacing else None
+        else:
+            # Will be set when a specific slice is selected
+            self.image = None
+            self.spacing = None
+        
+        # Slice indices for each analysis module (hardcoded defaults)
+        self.uniformity_slice_index = 0
+        self.high_contrast_slice_index = 1
+        self.ctp401_slice_index = 2
+        self.ctp515_slice_index = 3
+        
         self.results: Dict[str, Any] = {}
 
         # Store actual analyzer objects for plotting:
@@ -48,6 +77,9 @@ class Catphan404Analyzer:
             self.results['uniformity']: ROI statistics and uniformity metric.
             self.results['center']: Detected (x, y) center coordinates.
         """
+        # Get averaged image from the uniformity slice
+        self.image, self.spacing = self._average_slices(self.uniformity_slice_index)
+        
         # Estimate phantom center from the image
         cy, cx = self._estimate_center(self.image)
 
@@ -75,6 +107,8 @@ class Catphan404Analyzer:
         Populates:
             self.results['high_contrast']: MTF curve data and resolution metrics.
         """
+        # Get averaged image from the high contrast slice
+        self.image, self.spacing = self._average_slices(self.high_contrast_slice_index)
 
         # Use center from uniformity analysis if available
         center = self.results.get('center', None)
@@ -112,7 +146,8 @@ class Catphan404Analyzer:
         Populates:
             self.results['ctp401']: Material ROI statistics and calibration data.
         """
-
+        # Get averaged image from the CTP401 slice
+        self.image, self.spacing = self._average_slices(self.ctp401_slice_index)
 
         # Use center from uniformity analysis if available
         center = self.results.get('center', None)
@@ -156,7 +191,9 @@ class Catphan404Analyzer:
         Populates:
             self.results['ctp515']: Low-contrast ROI statistics, CNR, and contrast values.
         """
-        """
+        # Get averaged image from the CTP515 slice
+        self.image, self.spacing = self._average_slices(self.ctp515_slice_index)
+        
         # Crop the image if requested
         if crop_x > 0 or crop_y > 0:
             h, w = self.image.shape
@@ -179,13 +216,52 @@ class Catphan404Analyzer:
         # Store the analyzer:
         self._ctp515_analyzer = analyzer
 
-    def run_slice_thickness(self):
-        """Run slice thickness (FWHM) analysis."""
-        analyzer = SliceThicknessAnalyzer(self.image)
-        self.results['slice_thickness'] = analyzer.analyze()
-
 
     # ------------------ Helper functions ------------------
+    def _average_slices(self, slice_index: int) -> Tuple[np.ndarray, Optional[Tuple[float, float]]]:
+        """
+        Average a slice with its two neighboring slices.
+        
+        Averages the specified slice with the slices immediately before and after it
+        (e.g., if slice_index=50, averages slices 49, 50, 51). Handles edge cases
+        by only averaging available slices.
+        
+        Args:
+            slice_index (int): Index of the center slice to average.
+        
+        Returns:
+            Tuple[np.ndarray, Optional[Tuple[float, float]]]: 
+                - Averaged image array
+                - Pixel spacing from the center slice metadata
+        
+        Raises:
+            ValueError: If dicom_series is not available or slice_index is out of range.
+        """
+        if self.dicom_series is None:
+            raise ValueError("Cannot average slices: no DICOM series loaded")
+        
+        if slice_index < 0 or slice_index >= len(self.dicom_series):
+            raise ValueError(f"Slice index {slice_index} out of range (0-{len(self.dicom_series)-1})")
+        
+        # Determine which slices to average
+        start_idx = max(0, slice_index - 1)
+        end_idx = min(len(self.dicom_series) - 1, slice_index + 1)
+        
+        # Collect images to average
+        images_to_average = []
+        for idx in range(start_idx, end_idx + 1):
+            images_to_average.append(self.dicom_series[idx]['image'])
+        
+        # Average the images
+        averaged_image = np.mean(images_to_average, axis=0)
+        
+        # Get spacing from the center slice
+        center_metadata = self.dicom_series[slice_index]['metadata']
+        spacing_raw = center_metadata.get('Spacing')
+        spacing = (float(spacing_raw[0]), float(spacing_raw[1])) if spacing_raw else None
+        
+        return averaged_image, spacing
+    
     def _estimate_center(self, img: np.ndarray) -> Tuple[int, int]:
         """
         Estimate phantom center using intensity-weighted center of mass.

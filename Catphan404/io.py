@@ -72,7 +72,7 @@ def _read_imageio(path: str) -> Tuple[np.ndarray, dict]:
 
 
 def load_image(path: str) -> Tuple[np.ndarray, dict]:
-    \"\"\"
+    """
     Load an image file (DICOM or standard image format).
 
     Automatically detects format based on file extension. DICOM files are
@@ -90,7 +90,7 @@ def load_image(path: str) -> Tuple[np.ndarray, dict]:
 
     Raises:
         ImportError: If required package (pydicom or imageio) is not installed.
-    \"\"\"
+    """
     lower = path.lower()
     if lower.endswith('.dcm') or lower.endswith('.dicom'):
         return _read_dicom(path)
@@ -131,7 +131,7 @@ def select_dicom_folder() -> Optional[str]:
 
 
 def load_dicom_series(folder_path: str) -> List[Dict[str, any]]:
-    """Load all DICOM files from a folder.
+    """Load all DICOM files from a folder (recursively searches subdirectories).
     
     Args:
         folder_path (str): Path to folder containing DICOM files.
@@ -154,25 +154,38 @@ def load_dicom_series(folder_path: str) -> List[Dict[str, any]]:
     if not folder.exists():
         raise ValueError(f"Folder does not exist: {folder_path}")
     
-    # Find all potential DICOM files (common extensions and no extension)
+    # Recursively find all files, skip obvious non-DICOM files
+    # DICOM files can have any extension or none
+    import os
     dicom_files = []
-    for ext in ['*.dcm', '*.dicom', '*.DCM', '*.DICOM']:
-        dicom_files.extend(folder.glob(ext))
+    for root, _, file_list in os.walk(folder_path):
+        for filename in file_list:
+            # Skip known non-DICOM files
+            if any(x in filename.lower() for x in ['dir', '.txt', '.json', '.md']):
+                continue
+            dicom_files.append(Path(root, filename))
     
-    # Also try files without extension (common for DICOM)
-    for file in folder.iterdir():
-        if file.is_file() and file.suffix == '':
-            dicom_files.append(file)
-    
-    # Remove duplicates
-    dicom_files = list(set(dicom_files))
+    print(f"Found {len(dicom_files)} potential files to check")
     
     # Load each DICOM file
     series = []
+    failed_count = 0
     for file_path in dicom_files:
         try:
-            ds = pydicom.dcmread(str(file_path))
+            # Use force=True for better compatibility with non-standard DICOM
+            ds = pydicom.dcmread(str(file_path), force=True)
+            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+            
             arr = ds.pixel_array.astype(float)
+            
+            # Extract acquisition time for proper sorting
+            acquisition_time = getattr(ds, 'AcquisitionTime', None)
+            acquisition_datetime = getattr(ds, 'AcquisitionDateTime', None)
+            series_time = getattr(ds, 'SeriesTime', None)
+            content_time = getattr(ds, 'ContentTime', None)
+            
+            # Use the first available timestamp (in priority order)
+            timestamp = acquisition_datetime or acquisition_time or series_time or content_time or '000000.000000'
             
             # Extract metadata
             meta = {
@@ -180,24 +193,40 @@ def load_dicom_series(folder_path: str) -> List[Dict[str, any]]:
                 "SliceThickness": getattr(ds, 'SliceThickness', None),
                 "Modality": getattr(ds, 'Modality', None),
                 "InstanceNumber": getattr(ds, 'InstanceNumber', None),
-                "SliceLocation": getattr(ds, 'SliceLocation', None)
+                "SliceLocation": getattr(ds, 'SliceLocation', None),
+                "AcquisitionTime": acquisition_time,
+                "AcquisitionDateTime": acquisition_datetime
             }
             
             series.append({
                 'image': arr,
                 'metadata': meta,
                 'path': str(file_path),
-                'instance_number': meta.get('InstanceNumber', 0)
+                'instance_number': meta.get('InstanceNumber', 0),
+                'timestamp': timestamp
             })
         except Exception as e:
             # Skip files that can't be read as DICOM
-            print(f"Warning: Could not read {file_path} as DICOM: {e}")
+            failed_count += 1
+            # Only print first few errors to avoid spam
+            if failed_count <= 3:
+                print(f"⚠️  Could not read {file_path.name} as DICOM: {e}")
             continue
     
-    if not series:
-        raise ValueError(f"No valid DICOM files found in {folder_path}")
+    if failed_count > 3:
+        print(f"⚠️  ({failed_count - 3} more files failed to load)")
     
-    # Sort by instance number
-    series.sort(key=lambda x: x['instance_number'] or 0)
+    if not series:
+        raise ValueError(f"No valid DICOM files found in {folder_path}. Checked {len(dicom_files)} files, all failed.")
+    
+    # Sort by timestamp (reverse chronological order)
+    series.sort(key=lambda x: x['timestamp'], reverse=True)
+    
+    # Print slice information for debugging
+    print(f"\n📊 Slice order (by acquisition time):")
+    for idx, slice_data in enumerate(series):
+        timestamp = slice_data['timestamp']
+        path_name = Path(slice_data['path']).name
+        print(f"  [{idx}] {path_name} - Time: {timestamp}")
     
     return series

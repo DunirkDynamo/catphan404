@@ -1,4 +1,7 @@
 import numpy as np
+from scipy import ndimage
+from scipy.interpolate import interpn
+from scipy.signal import find_peaks
 
 class AnalyzerCTP401:
     """
@@ -117,3 +120,93 @@ class AnalyzerCTP401:
         }
 
         return self.results
+
+    def detect_rotation(self, initial_angle_deg: float = 0) -> tuple[float, tuple, tuple]:
+        """
+        Detect phantom rotation using air ROI positions.
+        
+        Similar to FindCTP404Rotation in the original code - finds the top and bottom
+        air ROIs and calculates rotation based on their offset from vertical alignment.
+        
+        Args:
+            initial_angle_deg (float): Initial rotation guess in degrees (default 0)
+        
+        Returns:
+            tuple: (rotation_angle, top_air_center, bottom_air_center)
+                - rotation_angle: rotation offset in degrees
+                - top_air_center: (x, y) center of top air ROI
+                - bottom_air_center: (x, y) center of bottom air ROI
+        """
+        image = self.image
+        h, w = image.shape
+        c = self.center
+        space = self.pixel_spacing
+        
+        # Known radius to air ROI centers
+        ring_r = 58.5 / space
+        
+        # Initial positions of top and bottom air ROIs (assuming 90° and -90°)
+        ct = (ring_r * np.cos(np.radians(90 + initial_angle_deg)) + c[0],
+              ring_r * np.sin(np.radians(90 + initial_angle_deg)) + c[1])
+        cb = (ring_r * np.cos(np.radians(-90 + initial_angle_deg)) + c[0],
+              ring_r * np.sin(np.radians(-90 + initial_angle_deg)) + c[1])
+        
+        # Setup for interpolation
+        x = np.linspace(0, h - 1, h)
+        y = np.linspace(0, w - 1, w)
+        
+        # Profile parameters
+        profile_length = 25  # pixels to sample on each side
+        granularity = 3      # sampling density
+        
+        def find_air_roi_center(roi_pos, profile_len, gran):
+            """Find precise center of an air ROI by interpolating profiles."""
+            # Horizontal and vertical coordinates for sampling
+            x_horiz = np.linspace(roi_pos[0] - profile_len, roi_pos[0] + profile_len, profile_len * gran)
+            x_vert = np.linspace(roi_pos[1] - profile_len, roi_pos[1] + profile_len, profile_len * gran)
+            
+            # Initialize profiles
+            prof_h = np.zeros(len(x_horiz))
+            prof_v = np.zeros(len(x_vert))
+            
+            # Interpolate profiles
+            for i in range(len(x_horiz)):
+                # Horizontal profile at fixed y
+                prof_h[i] = interpn((x, y), image, [roi_pos[1], x_horiz[i]], 
+                                   bounds_error=False, fill_value=0)
+                # Vertical profile at fixed x
+                prof_v[i] = interpn((x, y), image, [x_vert[i], roi_pos[0]], 
+                                   bounds_error=False, fill_value=0)
+            
+            # Take derivatives to find edges
+            dh = np.diff(prof_h)
+            dv = np.diff(prof_v)
+            
+            # Find peaks in absolute derivative (edges of air ROI)
+            try:
+                peaks_h, _ = find_peaks(np.abs(dh), height=100)
+                peaks_v, _ = find_peaks(np.abs(dv), height=100)
+                
+                # Calculate center offset from initial position
+                if len(peaks_h) >= 2 and len(peaks_v) >= 2:
+                    offset_len = len(x_horiz) / 2
+                    mid_h = np.mean(peaks_h) - offset_len
+                    mid_v = np.mean(peaks_v) - offset_len
+                    return (roi_pos[0] + mid_h, roi_pos[1] + mid_v)
+                else:
+                    return roi_pos  # Fallback to initial position
+            except:
+                return roi_pos  # Fallback to initial position
+        
+        # Iteratively refine air ROI centers (similar to original code)
+        iterations = 3
+        for i in range(iterations):
+            ct = find_air_roi_center(ct, profile_length, granularity)
+            cb = find_air_roi_center(cb, profile_length, granularity)
+        
+        # Calculate rotation angle from offset between top and bottom ROIs
+        tx = ct[0] - cb[0]
+        ty = ct[1] - cb[1]
+        rotation_angle = -np.arctan(tx / ty) * 180 / np.pi
+        
+        return rotation_angle, ct, cb

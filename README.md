@@ -69,6 +69,45 @@ ana = Catphan404Analyzer(image=img, spacing=meta.get('Spacing'))
 ana.run_uniformity()
 ```
 
+**Using Individual Analyzers Directly:**
+
+You can use any analyzer module independently without `Catphan404Analyzer`:
+
+```python
+from catphan404.uniformity import UniformityAnalyzer
+from catphan404.io import load_image
+import numpy as np
+
+# Load image
+img, meta = load_image('test_scans/uniformity.dcm')
+
+# Estimate phantom center
+threshold = np.percentile(img, 75)
+mask = img > threshold
+coords = np.argwhere(mask)
+cy, cx = coords.mean(axis=0)
+
+# Get pixel spacing
+spacing = meta.get('Spacing', [1.0, 1.0])
+pixel_spacing = float(spacing[0])
+
+# Use analyzer directly
+analyzer = UniformityAnalyzer(
+    image=img,
+    center=(cx, cy),
+    pixel_spacing=pixel_spacing
+)
+
+results = analyzer.analyze()
+print(results)
+```
+
+All analyzer modules follow the same pattern:
+- `UniformityAnalyzer(image, center, pixel_spacing)`
+- `HighContrastAnalyzer(image, center, pixel_spacing)`
+- `AnalyzerCTP401(image, center, pixel_spacing)`
+- `AnalyzerCTP515(image, center, pixel_spacing)`
+
 ## Requirements
 - numpy
 - scipy
